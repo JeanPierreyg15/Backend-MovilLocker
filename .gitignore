@@ -1,0 +1,9 @@
+# datos / entorno
+.env
+.env.*
+!.env.example
+locker.db
+
+__pycache__/
+*.py[cod]
+.venv/
