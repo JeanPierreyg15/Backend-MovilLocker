@@ -1,7 +1,5 @@
 import hashlib
 import logging
-import time
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -16,6 +14,7 @@ from sqlalchemy.orm import Session
 from config import config
 from correo import enmascarar_email, enviar_codigo_recuperacion
 from database import get_db
+from limitador import ip_cliente, limitar_peticiones
 from models import User
 from schemas import (
     CambiarPassword,
@@ -48,24 +47,6 @@ class SolicitudRecuperacion(BaseModel):
 class RestablecerPassword(BaseModel):
     token: str
     password: str
-
-
-# ---------- Rate limiting sencillo en memoria ----------
-
-_intentos: dict[str, list[float]] = defaultdict(list)
-
-
-def limitar_peticiones(request: Request, accion: str, maximo: int, ventana_segundos: int = 60) -> None:
-    clave = f"{accion}:{request.client.host if request.client else 'desconocido'}"
-    ahora = time.time()
-    recientes = [marca for marca in _intentos[clave] if ahora - marca < ventana_segundos]
-    if len(recientes) >= maximo:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Demasiados intentos. Espera un momento e inténtalo de nuevo.",
-        )
-    recientes.append(ahora)
-    _intentos[clave] = recientes
 
 
 # ---------- Utilidades de token ----------
@@ -115,7 +96,9 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 # ---------- Registro / Login ----------
 
 @router.post("/register", response_model=UserResponse)
-def register(user: UserCreate, db: Session = Depends(get_db)):
+def register(user: UserCreate, request: Request, db: Session = Depends(get_db)):
+    limitar_peticiones(request, "register", maximo=10)
+
     if existe_usuario(db, user.email):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email ya registrado")
 
@@ -137,7 +120,15 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=LoginResponse)
 def login(user: UserLogin, request: Request, db: Session = Depends(get_db)):
-    limitar_peticiones(request, "login", maximo=20)
+    # Cubo único IP + correo: evita que un usuario bloquee a todos los que
+    # comparten IP (NAT) y limita la fuerza bruta contra una cuenta concreta.
+    limitar_peticiones(
+        request,
+        "login",
+        maximo=10,
+        incluir_ip=False,
+        claves_extra=[f"ip:{ip_cliente(request)}:correo:{user.email}"],
+    )
 
     usuario = existe_usuario(db, user.email)
     if usuario is None:
@@ -190,10 +181,18 @@ def actualizar_perfil(
 @router.put("/password", response_model=Token)
 def cambiar_password(
     datos: CambiarPassword,
+    request: Request,
     usuario_actual: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Cambia la contraseña verificando la actual e invalida las sesiones anteriores."""
+    limitar_peticiones(
+        request,
+        "password",
+        maximo=5,
+        claves_extra=[f"usuario:{usuario_actual.id}"],
+    )
+
     if not pwd_context.verify(datos.password_actual, usuario_actual.hashed_password):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La contraseña actual no es correcta")
 
@@ -219,10 +218,18 @@ def cambiar_password(
 @router.delete("/cuenta", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_cuenta(
     datos: EliminarCuenta,
+    request: Request,
     usuario_actual: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Elimina la cuenta (con sus links y etiquetas) tras confirmar la contraseña."""
+    limitar_peticiones(
+        request,
+        "cuenta",
+        maximo=5,
+        claves_extra=[f"usuario:{usuario_actual.id}"],
+    )
+
     if not pwd_context.verify(datos.password, usuario_actual.hashed_password):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La contraseña no es correcta")
 

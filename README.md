@@ -67,6 +67,7 @@ Healthcheck: <http://localhost:8000/health>
 | `CORS_ORIGINS` | No | Orígenes permitidos separados por coma. |
 | `DATABASE_URL` | No | Cadena SQLAlchemy (por defecto `sqlite:///./locker.db`). |
 | `AUTO_MIGRATE` | No | Aplica `alembic upgrade head` al arrancar (por defecto `true`). |
+| `TRUSTED_PROXIES` | No | IPs/CIDR de proxies de confianza separadas por coma. Solo desde ellas se acepta `X-Forwarded-For` como IP real. |
 | `SMTP_HOST` | No | Servidor SMTP para enviar el código de recuperación. |
 | `SMTP_PORT` | No | Puerto SMTP (587). |
 | `SMTP_USER` / `SMTP_PASSWORD` | No | Credenciales SMTP (usa una contraseña de aplicación). |
@@ -131,7 +132,17 @@ Notas de validación:
 - No se permiten URLs duplicadas por usuario.
 - Etiquetas únicas por usuario sin distinguir mayúsculas.
 - `avatar_color` debe ser hex `#RRGGBB`.
-- Rate limiting básico: 20 login/min y 10 recuperaciones/min por IP.
+- Rate limiting en memoria:
+  - registro: 10/min por IP;
+  - login: 10/min por combinación IP + correo;
+  - recuperación: 10/min por IP;
+  - cambio de contraseña y borrado de cuenta: 5/min por IP y por usuario.
+  - Solo se usa `X-Forwarded-For` si la petición viene de una IP de
+    `TRUSTED_PROXIES`; si no, la cabecera se ignora.
+  - **Limitación**: el contador vive en el proceso. Con varios workers o
+    réplicas cada uno lleva su propia cuenta (el límite efectivo se multiplica).
+    Para producción con varios workers usa un almacén compartido (Redis) o un
+    límite en el proxy inverso.
 
 ## Tests
 
@@ -159,6 +170,7 @@ main.py            App FastAPI, CORS, healthcheck, migraciones y routers
 config.py          Configuración (SECRET_KEY obligatoria, SMTP, CORS)
 correo.py          Envío del código de recuperación por SMTP
 database.py        Engine, sesión y PRAGMA foreign_keys para SQLite
+limitador.py       Rate limiting en memoria (IP, usuario, X-Forwarded-For)
 models.py          User, Link, Tag, link_tags y UTCDateTime (UTC en SQLite)
 schemas.py         Validación de entrada/salida (Pydantic)
 alembic/           Migraciones (esquema inicial + columnas de perfil)

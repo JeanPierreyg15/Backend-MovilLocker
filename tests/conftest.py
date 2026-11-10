@@ -11,15 +11,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from database import Base, engine
+from limitador import reiniciar as reiniciar_limitador
 from main import app
-from routers import auth as auth_router
 
 
 @pytest.fixture()
 def cliente():
     # El rate limit es en memoria y por IP: se limpia para que un test no
     # afecte al siguiente al ejecutar la suite varias veces seguidas.
-    auth_router._intentos.clear()
+    reiniciar_limitador()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     with TestClient(app, client=("127.0.0.1", 50000)) as test_client:

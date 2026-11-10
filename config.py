@@ -41,6 +41,10 @@ class Configuracion(BaseSettings):
     # URL pública de la app, usada en el cuerpo del correo de recuperación.
     APP_URL: str = "http://localhost:5173"
 
+    # IPs o redes CIDR de proxies de confianza (separadas por coma). Solo si la
+    # petición llega desde una de ellas se usa X-Forwarded-For para la IP real.
+    TRUSTED_PROXIES: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @field_validator("SECRET_KEY")
@@ -60,6 +64,10 @@ class Configuracion(BaseSettings):
     @property
     def smtp_configurado(self) -> bool:
         return bool(self.SMTP_HOST and (self.SMTP_FROM or self.SMTP_USER))
+
+    @property
+    def proxies_confiables(self) -> list[str]:
+        return [proxy.strip() for proxy in self.TRUSTED_PROXIES.split(",") if proxy.strip()]
 
 
 config = Configuracion()
