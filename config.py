@@ -25,6 +25,22 @@ class Configuracion(BaseSettings):
 
     DATABASE_URL: str = "sqlite:///./locker.db"
 
+    # Migraciones: al arrancar se aplica `alembic upgrade head` salvo que se
+    # desactive (útil si las migraciones se ejecutan en un paso de despliegue).
+    AUTO_MIGRATE: bool = True
+
+    # Envío de correo para la recuperación de contraseña (SMTP).
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM: str | None = None
+    SMTP_TLS: bool = True
+    SMTP_SSL: bool = False
+
+    # URL pública de la app, usada en el cuerpo del correo de recuperación.
+    APP_URL: str = "http://localhost:5173"
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @field_validator("SECRET_KEY")
@@ -40,6 +56,10 @@ class Configuracion(BaseSettings):
     @property
     def origenes_cors(self) -> list[str]:
         return [origen.strip() for origen in self.CORS_ORIGINS.split(",") if origen.strip()]
+
+    @property
+    def smtp_configurado(self) -> bool:
+        return bool(self.SMTP_HOST and (self.SMTP_FROM or self.SMTP_USER))
 
 
 config = Configuracion()

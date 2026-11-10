@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 from typing import List, Optional
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, field_validator
 
 
 # ---------- Utilidades de validación ----------
@@ -133,6 +133,12 @@ class TagResponse(TagBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TagCountResponse(TagResponse):
+    """Etiqueta con el número real de links que la usan."""
+
+    links_count: int = 0
+
+
 # ---------- Links ----------
 
 class LinkBase(BaseModel):
@@ -163,3 +169,12 @@ class LinkResponse(LinkBase):
     created_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @field_serializer("created_at", when_used="json")
+    def serializar_created_at(self, valor: Optional[datetime]) -> Optional[str]:
+        """Siempre emite UTC con sufijo Z, aunque la fecha llegue naive."""
+        if valor is None:
+            return None
+        if valor.tzinfo is None:
+            valor = valor.replace(tzinfo=timezone.utc)
+        return valor.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

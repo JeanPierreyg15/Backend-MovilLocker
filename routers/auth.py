@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import config
+from correo import enviar_codigo_recuperacion
 from database import get_db
 from models import User
 from schemas import (
@@ -27,6 +29,7 @@ from schemas import (
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+logger = logging.getLogger("locker.auth")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -231,6 +234,15 @@ def eliminar_cuenta(
 
 # ---------- Recuperación de contraseña ----------
 
+def es_peticion_local(request: Request) -> bool:
+    """True si la petición llega directamente desde loopback (desarrollo local)."""
+    if request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip"):
+        # Detrás de un proxy todas las peticiones parecen venir de 127.0.0.1.
+        return False
+    host = request.client.host if request.client else ""
+    return host in {"127.0.0.1", "::1", "localhost"}
+
+
 @router.post("/recuperar")
 def solicitar_recuperacion(
     solicitud: SolicitudRecuperacion,
@@ -240,7 +252,8 @@ def solicitar_recuperacion(
     """Solicita un enlace/código de recuperación.
 
     Por seguridad responde SIEMPRE lo mismo (exista o no el correo) y no revela
-    ningún token... salvo en modo DEBUG, pensado solo para desarrollo local.
+    ningún token. Solo en desarrollo (DEBUG=true) y desde loopback se devuelve
+    ``reset_token`` para poder probar el flujo sin servidor de correo.
     """
     limitar_peticiones(request, "recuperar", maximo=10)
 
@@ -256,10 +269,17 @@ def solicitar_recuperacion(
             },
             minutos=config.RESET_TOKEN_EXPIRE_MINUTES,
         )
-        if config.DEBUG:
-            # Solo en desarrollo: no hay servidor de correo configurado todavía.
+        entregado = enviar_codigo_recuperacion(usuario.email, token)
+
+        # Barrera: exponer el token únicamente en local y con DEBUG activo.
+        if not entregado and config.DEBUG and es_peticion_local(request):
             respuesta["reset_token"] = token
-        # TODO producción: enviar `token` por email (SMTP/Resend/SendGrid)
+        elif not entregado:
+            logger.warning(
+                "Recuperación solicitada para %s pero no se pudo entregar el correo "
+                "(SMTP no configurado o falló). El usuario no recibirá instrucciones.",
+                usuario.email,
+            )
 
     return respuesta
 

@@ -4,11 +4,23 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Tag, User
-from schemas import TagCreate, TagResponse
+from models import Link, Tag, User, link_tags
+from schemas import TagCountResponse, TagCreate, TagResponse
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/tags", tags=["Tags"])
+
+
+def _conteo_links_por_etiqueta(db: Session, usuario_id: int) -> dict[int, int]:
+    """Número real de links por etiqueta (sin el límite de la paginación)."""
+    filas = (
+        db.query(link_tags.c.tag_id, func.count(link_tags.c.link_id))
+        .join(Link, Link.id == link_tags.c.link_id)
+        .filter(Link.user_id == usuario_id)
+        .group_by(link_tags.c.tag_id)
+        .all()
+    )
+    return {tag_id: total for tag_id, total in filas}
 
 
 def _buscar_por_nombre(db: Session, nombre: str, usuario_id: int, excluir_id: int | None = None):
@@ -21,14 +33,28 @@ def _buscar_por_nombre(db: Session, nombre: str, usuario_id: int, excluir_id: in
     return consulta.first()
 
 
-@router.get("/", response_model=list[TagResponse])
+@router.get("/count")
+def contar_etiquetas(
+    db: Session = Depends(get_db),
+    usuario_actual: User = Depends(get_current_user),
+):
+    """Total real de etiquetas del usuario."""
+    total = (
+        db.query(func.count(Tag.id))
+        .filter(Tag.user_id == usuario_actual.id)
+        .scalar()
+    )
+    return {"count": total or 0}
+
+
+@router.get("/", response_model=list[TagCountResponse])
 def listar_etiquetas(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=500),
     db: Session = Depends(get_db),
     usuario_actual: User = Depends(get_current_user),
 ):
-    return (
+    etiquetas = (
         db.query(Tag)
         .filter(Tag.user_id == usuario_actual.id)
         .order_by(Tag.nombre.asc())
@@ -36,6 +62,16 @@ def listar_etiquetas(
         .limit(limit)
         .all()
     )
+    conteos = _conteo_links_por_etiqueta(db, usuario_actual.id)
+    return [
+        TagCountResponse(
+            id=etiqueta.id,
+            nombre=etiqueta.nombre,
+            icono=etiqueta.icono,
+            links_count=conteos.get(etiqueta.id, 0),
+        )
+        for etiqueta in etiquetas
+    ]
 
 
 @router.post("/", response_model=TagResponse)

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -19,6 +20,20 @@ def _etiquetas_del_usuario(db: Session, tag_ids: list[int], usuario_id: int) -> 
             detail="Alguna etiqueta no existe o no te pertenece",
         )
     return encontradas
+
+
+@router.get("/count")
+def contar_links(
+    db: Session = Depends(get_db),
+    usuario_actual: User = Depends(get_current_user),
+):
+    """Total real de links del usuario (no limitado por la paginación)."""
+    total = (
+        db.query(func.count(Link.id))
+        .filter(Link.user_id == usuario_actual.id)
+        .scalar()
+    )
+    return {"count": total or 0}
 
 
 @router.get("/", response_model=list[LinkResponse])

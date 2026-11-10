@@ -1,3 +1,8 @@
+from fastapi.testclient import TestClient
+
+from main import app
+
+
 def registrar(cliente, email="ana@ejemplo.com", password="secreto123"):
     return cliente.post(
         "/auth/register", json={"nombre": "Ana", "email": email, "password": password}
@@ -95,6 +100,8 @@ def test_crud_links_y_urls_invalidas(cliente):
     assert link["url"] == "https://react.dev"  # normalizada
     assert link["tags"][0]["nombre"] == "Dev"
     assert link["created_at"] is not None
+    # SQLite no guarda zona: el backend debe serializar UTC con sufijo Z.
+    assert link["created_at"].endswith("Z"), link["created_at"]
 
     # Duplicado por usuario
     duplicado = cliente.post(
@@ -124,6 +131,44 @@ def test_crud_links_y_urls_invalidas(cliente):
 
     # Eliminar
     assert cliente.delete(f"/links/{link['id']}", headers=cabeceras(token)).status_code == 204
+
+
+def test_paginacion_y_conteo_real_de_links(cliente):
+    registrar(cliente)
+    token = token_de(cliente)
+
+    for i in range(105):
+        respuesta = cliente.post(
+            "/links/",
+            json={"url": f"https://ejemplo.com/{i}", "titulo": f"Ejemplo {i}"},
+            headers=cabeceras(token),
+        )
+        assert respuesta.status_code == 200, respuesta.text
+
+    # El listado por defecto sigue limitado a 100...
+    primera = cliente.get("/links/", headers=cabeceras(token)).json()
+    assert len(primera) == 100
+    # ...pero /links/count revela el total real y la paginación alcanza el resto.
+    assert cliente.get("/links/count", headers=cabeceras(token)).json() == {"count": 105}
+    segunda = cliente.get("/links/?skip=100&limit=100", headers=cabeceras(token)).json()
+    assert len(segunda) == 5
+
+
+def test_etiquetas_incluyen_conteo_real_de_links(cliente):
+    registrar(cliente)
+    token = token_de(cliente)
+    tag = crear_tag(cliente, token).json()
+
+    for i in range(3):
+        cliente.post(
+            "/links/",
+            json={"url": f"https://contador.com/{i}", "titulo": f"C {i}", "tag_ids": [tag["id"]]},
+            headers=cabeceras(token),
+        )
+
+    etiquetas = cliente.get("/tags/", headers=cabeceras(token)).json()
+    assert etiquetas[0]["links_count"] == 3
+    assert cliente.get("/tags/count", headers=cabeceras(token)).json() == {"count": 1}
 
 
 def test_aislamiento_entre_usuarios(cliente):
@@ -197,6 +242,25 @@ def test_recuperacion_no_revela_correos_inexistentes(cliente):
     respuesta = cliente.post("/auth/recuperar", json={"email": "nadie@ejemplo.com"})
     assert respuesta.status_code == 200
     assert "reset_token" not in respuesta.json()
+
+
+def test_reset_token_no_se_expone_fuera_de_loopback(cliente):
+    """Aunque DEBUG=true, una petición externa nunca recibe el token."""
+    registrar(cliente)
+
+    with TestClient(app, client=("203.0.113.10", 50000)) as externo:
+        respuesta = externo.post("/auth/recuperar", json={"email": "ana@ejemplo.com"})
+
+    assert respuesta.status_code == 200
+    assert "reset_token" not in respuesta.json()
+
+    # Detrás de un proxy, una petición reenviada tampoco cuenta como local.
+    with_proxy = cliente.post(
+        "/auth/recuperar",
+        json={"email": "ana@ejemplo.com"},
+        headers={"X-Forwarded-For": "203.0.113.10"},
+    )
+    assert "reset_token" not in with_proxy.json()
 
 
 def test_cambio_de_password_invalida_sesiones(cliente):

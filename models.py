@@ -2,12 +2,39 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
+from sqlalchemy.types import TypeDecorator
 
 from database import Base
 
 
 def ahora_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class UTCDateTime(TypeDecorator):
+    """Guarda UTC sin zona (SQLite no la soporta) y la restaura al leer.
+
+    SQLite devuelve ``created_at`` como datetime naive. Sin este decorador,
+    Pydantic lo serializa sin ``Z`` y el navegador lo interpreta como hora
+    local (de ahí los "dentro de 5 horas" en zonas como America/Lima).
+    """
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
 
 class User(Base):
@@ -21,7 +48,7 @@ class User(Base):
     # Versión de sesión: se incrementa al cambiar/restablecer contraseña para
     # invalidar todos los JWT emitidos anteriormente.
     token_version = Column(Integer, nullable=False, default=1)
-    created_at = Column(DateTime(timezone=True), default=ahora_utc)
+    created_at = Column(UTCDateTime, default=ahora_utc)
 
     links = relationship(
         "Link", back_populates="owner", cascade="all, delete-orphan", passive_deletes=True
@@ -45,7 +72,7 @@ class Link(Base):
     url = Column(String, nullable=False)
     titulo = Column(String, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=ahora_utc)
+    created_at = Column(UTCDateTime, default=ahora_utc)
 
     owner = relationship("User", back_populates="links")
     tags = relationship("Tag", secondary=link_tags, back_populates="links")
@@ -58,7 +85,7 @@ class Tag(Base):
     nombre = Column(String, index=True, nullable=False)
     icono = Column(String(16), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    created_at = Column(DateTime(timezone=True), default=ahora_utc)
+    created_at = Column(UTCDateTime, default=ahora_utc)
 
     owner = relationship("User", back_populates="tags")
     links = relationship("Link", secondary=link_tags, back_populates="tags")
