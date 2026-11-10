@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,16 +27,68 @@ logger = logging.getLogger("locker")
 RAIZ = Path(__file__).resolve().parent
 
 
+def _ruta_lock_migraciones() -> Path:
+    """Lock junto a la base SQLite (compartido por los workers del mismo host)."""
+    prefijo = "sqlite:///"
+    if config.DATABASE_URL.startswith(prefijo):
+        ruta_db = config.DATABASE_URL[len(prefijo):]
+        if ruta_db and ruta_db != ":memory:":
+            return Path(ruta_db).resolve().parent / ".locker-migraciones.lock"
+    return RAIZ / ".locker-migraciones.lock"
+
+
+def _bloquear_migraciones(ruta: Path):
+    """Lock exclusivo entre procesos (msvcrt en Windows, fcntl en POSIX)."""
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    archivo = open(ruta, "a+", encoding="utf-8")
+    try:
+        archivo.write(" ")
+        archivo.flush()
+        archivo.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(archivo.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(archivo.fileno(), fcntl.LOCK_EX)
+    except Exception:
+        archivo.close()
+        raise
+    return archivo
+
+
+def _desbloquear_migraciones(archivo) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            archivo.seek(0)
+            msvcrt.locking(archivo.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(archivo.fileno(), fcntl.LOCK_UN)
+    finally:
+        archivo.close()
+
+
 def ejecutar_migraciones() -> None:
     """Aplica `alembic upgrade head` al arrancar la app.
 
-    Sustituye a `Base.metadata.create_all()`: una base de datos de una versión
-    anterior se actualiza sin perder datos (bio, token_version, tags.icono...).
+    El lock evita que varios workers arranquen la migración a la vez. Aun así,
+    en producción se recomienda desactivar ``AUTO_MIGRATE`` y ejecutar
+    ``alembic upgrade head`` como paso único de despliegue.
     """
-    cfg = AlembicConfig(str(RAIZ / "alembic.ini"))
-    cfg.set_main_option("script_location", str(RAIZ / "alembic"))
-    cfg.attributes["configure_logger"] = False  # no pisar el logging de uvicorn
-    command.upgrade(cfg, "head")
+    archivo_lock = _bloquear_migraciones(_ruta_lock_migraciones())
+    try:
+        cfg = AlembicConfig(str(RAIZ / "alembic.ini"))
+        cfg.set_main_option("script_location", str(RAIZ / "alembic"))
+        cfg.attributes["configure_logger"] = False  # no pisar el logging de uvicorn
+        command.upgrade(cfg, "head")
+    finally:
+        _desbloquear_migraciones(archivo_lock)
 
 
 def _origen_local(origen: str) -> bool:

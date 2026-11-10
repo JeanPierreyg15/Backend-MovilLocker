@@ -5,6 +5,7 @@
 locker.db
 test_locker.db
 *.db
+.locker-migraciones.lock
 
 __pycache__/
 *.py[cod]

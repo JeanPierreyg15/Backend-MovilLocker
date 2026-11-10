@@ -51,6 +51,11 @@ Healthcheck: <http://localhost:8000/health>
 > .venv\Scripts\alembic upgrade head
 > ```
 >
+> El arranque toma un lock de archivo (`.locker-migraciones.lock`) para que
+> varios workers del mismo host no migren a la vez. En producción con varias
+> réplicas se recomienda `AUTO_MIGRATE=false` y ejecutar `alembic upgrade head`
+> como paso único de despliegue.
+>
 > Una `locker.db` de una versión anterior **se actualiza sin perder datos**: la
 > migración inicial conserva las tablas existentes, la segunda añade `bio`,
 > `token_version` y `tags.icono`, y la tercera fusiona URLs duplicadas y crea la
@@ -67,7 +72,7 @@ Healthcheck: <http://localhost:8000/health>
 | `DEBUG` | No | Si es `true`, `/auth/recuperar` devuelve el código **solo a peticiones desde loopback**. **Solo desarrollo.** |
 | `CORS_ORIGINS` | No | Orígenes permitidos separados por coma. |
 | `DATABASE_URL` | No | Cadena SQLAlchemy (por defecto `sqlite:///./locker.db`). |
-| `AUTO_MIGRATE` | No | Aplica `alembic upgrade head` al arrancar (por defecto `true`). |
+| `AUTO_MIGRATE` | No | Aplica `alembic upgrade head` al arrancar (por defecto `true`). Con varias réplicas, desactívalo y migra como paso de despliegue. |
 | `TRUSTED_PROXIES` | No | IPs/CIDR de proxies de confianza separadas por coma. Solo desde ellas se acepta `X-Forwarded-For` como IP real. |
 | `SMTP_HOST` | No | Servidor SMTP para enviar el código de recuperación. |
 | `SMTP_PORT` | No | Puerto SMTP (587). |
