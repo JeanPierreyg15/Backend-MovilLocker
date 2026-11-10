@@ -124,8 +124,10 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 Notas de validación:
 
 - Emails se normalizan a minúsculas.
-- URLs solo `http`/`https`; se añade `https://` si falta y se rechazan
-  `javascript:`, `data:`, `file:`.
+- URLs solo `http`/`https`; se añade `https://` si falta (también en
+  `localhost:3000` o `example.com:8443/ruta`), se rechazan los esquemas
+  peligrosos (`javascript:`, `data:`, `file:`, `vbscript:`, `blob:`, `mailto:`,
+  `tel:`) y las URLs de más de 2048 caracteres o con espacios.
 - No se permiten URLs duplicadas por usuario.
 - Etiquetas únicas por usuario sin distinguir mayúsculas.
 - `avatar_color` debe ser hex `#RRGGBB`.

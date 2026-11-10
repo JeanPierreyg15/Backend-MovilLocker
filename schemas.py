@@ -8,23 +8,58 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, f
 
 # ---------- Utilidades de validación ----------
 
+LONGITUD_MAXIMA_URL = 2048
+ESQUEMAS_PERMITIDOS = frozenset({"http", "https"})
+ESQUEMAS_PELIGROSOS = frozenset(
+    {"javascript", "data", "file", "vbscript", "blob", "mailto", "tel"}
+)
+
+
 def normalizar_url(valor: str) -> str:
-    """Valida que sea una URL http/https y la normaliza (añade https:// si falta)."""
+    """Valida que sea una URL http/https y la normaliza (añade https:// si falta).
+
+    Un esquema solo se considera explícito si va seguido de ``://``: así
+    ``localhost:3000`` o ``example.com:8443`` se tratan como host:puerto y no
+    como un esquema desconocido. Los esquemas peligrosos se rechazan aunque
+    no lleven ``//`` (``javascript:``, ``data:``, ``mailto:``...).
+    """
     texto = (valor or "").strip()
     if not texto:
         raise ValueError("La URL es obligatoria")
+    if len(texto) > LONGITUD_MAXIMA_URL:
+        raise ValueError(f"La URL no puede superar los {LONGITUD_MAXIMA_URL} caracteres")
+    if any(caracter.isspace() for caracter in texto):
+        raise ValueError("La URL no puede contener espacios")
 
-    esquema = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*):", texto)
-    if esquema:
-        # Solo se permiten http/https: bloquea javascript:, data:, file:, etc.
-        if esquema.group(1).lower() not in ("http", "https"):
+    coincidencia = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*)://", texto)
+    if coincidencia:
+        if coincidencia.group(1).lower() not in ESQUEMAS_PERMITIDOS:
             raise ValueError("La URL debe usar http o https")
-        url = urlparse(texto)
+        try:
+            url = urlparse(texto)
+        except ValueError as error:
+            raise ValueError("La URL debe ser un enlace válido http o https") from error
     else:
-        url = urlparse(f"https://{texto}")
+        posible_esquema = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*):", texto)
+        if (
+            posible_esquema
+            and posible_esquema.group(1).lower() in ESQUEMAS_PELIGROSOS
+        ):
+            raise ValueError("La URL debe usar http o https")
+        try:
+            url = urlparse(f"https://{texto}")
+        except ValueError as error:
+            raise ValueError("La URL debe ser un enlace válido http o https") from error
 
-    if url.scheme not in ("http", "https") or not url.netloc or " " in url.netloc:
+    if url.scheme not in ESQUEMAS_PERMITIDOS or not url.netloc:
         raise ValueError("La URL debe ser un enlace válido http o https")
+    try:
+        # hostname/port lanzan ValueError con hosts o puertos malformados.
+        if not url.hostname:
+            raise ValueError
+        url.port
+    except ValueError as error:
+        raise ValueError("La URL debe ser un enlace válido http o https") from error
     return url.geturl()
 
 
