@@ -51,10 +51,10 @@ class User(Base):
     created_at = Column(UTCDateTime, default=ahora_utc)
 
     links = relationship(
-        "Link", back_populates="owner", cascade="all, delete-orphan", passive_deletes=True
+        "Link", back_populates="owner", cascade="all, delete-orphan"
     )
     tags = relationship(
-        "Tag", back_populates="owner", cascade="all, delete-orphan", passive_deletes=True
+        "Tag", back_populates="owner", cascade="all, delete-orphan"
     )
 
 

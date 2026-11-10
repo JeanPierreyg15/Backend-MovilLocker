@@ -138,7 +138,8 @@ Notas de validación:
 La suite cubre registro/login, perfil, links (incluidas URLs peligrosas,
 duplicados, paginación y conteo real), aislamiento entre usuarios, etiquetas con
 `links_count`, recuperación monouso (solo loopback en DEBUG), migración de una
-base de datos antigua, invalidación de sesiones, borrado de cuenta y healthcheck.
+base de datos antigua, borrado en cascada incluso con FK antiguas sin
+`ON DELETE CASCADE`, invalidación de sesiones, borrado de cuenta y healthcheck.
 
 ## Docker
 
