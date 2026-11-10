@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWTError
 from passlib.context import CryptContext
@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import config
-from correo import enviar_codigo_recuperacion
+from correo import enmascarar_email, enviar_codigo_recuperacion
 from database import get_db
 from models import User
 from schemas import (
@@ -247,13 +247,16 @@ def es_peticion_local(request: Request) -> bool:
 def solicitar_recuperacion(
     solicitud: SolicitudRecuperacion,
     request: Request,
+    tareas: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """Solicita un enlace/código de recuperación.
 
-    Por seguridad responde SIEMPRE lo mismo (exista o no el correo) y no revela
-    ningún token. Solo en desarrollo (DEBUG=true) y desde loopback se devuelve
-    ``reset_token`` para poder probar el flujo sin servidor de correo.
+    Por seguridad responde SIEMPRE lo mismo (exista o no el correo) y el envío
+    SMTP se hace en segundo plano, de modo que el tiempo de respuesta no revela
+    qué correos están registrados. Solo en desarrollo (DEBUG=true) y desde
+    loopback se devuelve ``reset_token`` para probar el flujo sin servidor de
+    correo.
     """
     limitar_peticiones(request, "recuperar", maximo=10)
 
@@ -269,16 +272,19 @@ def solicitar_recuperacion(
             },
             minutos=config.RESET_TOKEN_EXPIRE_MINUTES,
         )
-        entregado = enviar_codigo_recuperacion(usuario.email, token)
 
-        # Barrera: exponer el token únicamente en local y con DEBUG activo.
-        if not entregado and config.DEBUG and es_peticion_local(request):
+        if config.smtp_configurado:
+            # La respuesta se devuelve ya: el SMTP puede tardar (o fallar) sin
+            # afectar al tiempo de respuesta ni revelar si el correo existe.
+            tareas.add_task(enviar_codigo_recuperacion, usuario.email, token)
+        elif config.DEBUG and es_peticion_local(request):
+            # Barrera: exponer el token únicamente en local y con DEBUG activo.
             respuesta["reset_token"] = token
-        elif not entregado:
+        else:
             logger.warning(
                 "Recuperación solicitada para %s pero no se pudo entregar el correo "
                 "(SMTP no configurado o falló). El usuario no recibirá instrucciones.",
-                usuario.email,
+                enmascarar_email(usuario.email),
             )
 
     return respuesta

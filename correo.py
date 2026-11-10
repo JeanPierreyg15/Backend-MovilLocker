@@ -15,13 +15,23 @@ from config import config
 logger = logging.getLogger("locker.correo")
 
 
+def enmascarar_email(email: str) -> str:
+    """Devuelve el correo con la parte local oculta para los logs."""
+    if not email or "@" not in email:
+        return "***"
+    local, dominio = email.split("@", 1)
+    if not local:
+        return f"***@{dominio}"
+    return f"{local[0]}***@{dominio}"
+
+
 def enviar_codigo_recuperacion(destinatario: str, codigo: str) -> bool:
     """Envía el código de recuperación. Devuelve True solo si se entregó al SMTP."""
     if not config.smtp_configurado:
         logger.warning(
             "SMTP no configurado: no se pudo enviar el correo de recuperación a %s. "
             "Define SMTP_HOST y SMTP_FROM (o SMTP_USER) en el .env.",
-            destinatario,
+            enmascarar_email(destinatario),
         )
         return False
 
@@ -74,8 +84,11 @@ def enviar_codigo_recuperacion(destinatario: str, codigo: str) -> bool:
                     smtp.login(config.SMTP_USER, config.SMTP_PASSWORD or "")
                 smtp.send_message(mensaje)
     except Exception:
-        logger.exception("No se pudo enviar el correo de recuperación a %s", destinatario)
+        logger.exception(
+            "No se pudo enviar el correo de recuperación a %s",
+            enmascarar_email(destinatario),
+        )
         return False
 
-    logger.info("Correo de recuperación enviado a %s", destinatario)
+    logger.info("Correo de recuperación enviado a %s", enmascarar_email(destinatario))
     return True

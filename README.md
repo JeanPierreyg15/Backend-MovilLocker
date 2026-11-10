@@ -83,7 +83,9 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 ## Recuperación de contraseña
 
 - `POST /auth/recuperar` responde **siempre 200** con el mismo mensaje, exista o
-  no el correo (no revela cuentas registradas).
+  no el correo (no revela cuentas registradas). El envío SMTP se hace en segundo
+  plano (`BackgroundTasks`), así que el tiempo de respuesta tampoco lo revela.
+- Los logs enmascaran el correo (`a***@ejemplo.com`); nunca se registra completo.
 - El código se envía por SMTP si defines `SMTP_HOST` y `SMTP_FROM` (o
   `SMTP_USER`). Sin SMTP, en producción el usuario no recibe nada: la app
   registra una advertencia ruidosa al arrancar.
