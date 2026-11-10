@@ -13,7 +13,13 @@ from schemas import LONGITUD_MAXIMA_URL, normalizar_url
         ("  https://ejemplo.com/ruta  ", "https://ejemplo.com/ruta"),
         # El esquema es válido sin importar mayúsculas y se normaliza a minúsculas.
         ("HTTP://ejemplo.com", "http://ejemplo.com"),
-        ("HTTPS://Ejemplo.com/Ruta", "https://Ejemplo.com/Ruta"),
+        ("HTTPS://Ejemplo.com/Ruta", "https://ejemplo.com/Ruta"),
+        # El host se guarda en minúsculas y la barra final redundante se quita.
+        ("https://Ejemplo.COM", "https://ejemplo.com"),
+        ("https://ejemplo.com/", "https://ejemplo.com"),
+        ("https://ejemplo.com/ruta/", "https://ejemplo.com/ruta"),
+        ("https://EJEMPLO.com:8443/Ruta/", "https://ejemplo.com:8443/Ruta"),
+        ("https://ejemplo.com/?a=1", "https://ejemplo.com/?a=1"),
     ],
 )
 def test_normaliza_urls_sin_esquema_o_con_esquema(entrada, esperado):

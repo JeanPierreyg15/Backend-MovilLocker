@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -20,6 +21,23 @@ def _etiquetas_del_usuario(db: Session, tag_ids: list[int], usuario_id: int) -> 
             detail="Alguna etiqueta no existe o no te pertenece",
         )
     return encontradas
+
+
+def _buscar_duplicado(
+    db: Session, usuario_id: int, url: str, excluir_id: int | None = None
+) -> Link | None:
+    """Busca un link con la misma URL ya normalizada para el usuario."""
+    consulta = db.query(Link).filter(Link.user_id == usuario_id, Link.url == url)
+    if excluir_id is not None:
+        consulta = consulta.filter(Link.id != excluir_id)
+    return consulta.first()
+
+
+def _error_duplicado() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Ese enlace ya está guardado",
+    )
 
 
 @router.get("/count")
@@ -60,11 +78,9 @@ def crear_link(
     db: Session = Depends(get_db),
     usuario_actual: User = Depends(get_current_user),
 ):
-    duplicado = db.query(Link).filter(
-        Link.user_id == usuario_actual.id, Link.url == link.url
-    ).first()
+    duplicado = _buscar_duplicado(db, usuario_actual.id, link.url)
     if duplicado:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ese enlace ya está guardado")
+        raise _error_duplicado()
 
     nuevo_link = Link(
         url=link.url,
@@ -73,7 +89,13 @@ def crear_link(
         tags=_etiquetas_del_usuario(db, link.tag_ids or [], usuario_actual.id),
     )
     db.add(nuevo_link)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Ventana de carrera: otro proceso insertó la misma URL entre la
+        # comprobación y el commit. La restricción de BD es la que decide.
+        db.rollback()
+        raise _error_duplicado() from None
     db.refresh(nuevo_link)
     return nuevo_link
 
@@ -91,16 +113,18 @@ def actualizar_link(
     if not existente:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enlace no encontrado o no autorizado")
 
-    duplicado = db.query(Link).filter(
-        Link.user_id == usuario_actual.id, Link.url == link.url, Link.id != link_id
-    ).first()
+    duplicado = _buscar_duplicado(db, usuario_actual.id, link.url, excluir_id=link_id)
     if duplicado:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ese enlace ya está guardado")
+        raise _error_duplicado()
 
     existente.url = link.url
     existente.titulo = link.titulo
     existente.tags = _etiquetas_del_usuario(db, link.tag_ids or [], usuario_actual.id)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise _error_duplicado() from None
     db.refresh(existente)
     return existente
 

@@ -68,6 +68,9 @@ link_tags = Table(
 
 class Link(Base):
     __tablename__ = "links"
+    __table_args__ = (
+        UniqueConstraint("user_id", "url", name="uq_links_usuario_url"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String, nullable=False)
     titulo = Column(String, nullable=False)

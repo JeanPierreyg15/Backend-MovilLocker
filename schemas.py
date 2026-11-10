@@ -71,7 +71,24 @@ def normalizar_url(valor: str) -> str:
         url.port
     except ValueError as error:
         raise ValueError("La URL debe ser un enlace válido http o https") from error
-    return url.geturl()
+
+    # El host no distingue mayúsculas/minúsculas y la barra final del path es
+    # redundante: normalizarlos evita duplicados que solo difieren en eso.
+    netloc = url.netloc
+    if "@" in netloc:
+        credenciales, host_puerto = netloc.rsplit("@", 1)
+        netloc = f"{credenciales}@{host_puerto.lower()}"
+    else:
+        netloc = netloc.lower()
+
+    ruta = url.path
+    if not url.query and not url.fragment:
+        if ruta == "/":
+            ruta = ""
+        elif ruta.endswith("/"):
+            ruta = ruta[:-1]
+
+    return url._replace(netloc=netloc, path=ruta).geturl()
 
 
 # ---------- Usuarios / Autenticación ----------

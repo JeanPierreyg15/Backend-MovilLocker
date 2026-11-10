@@ -52,8 +52,9 @@ Healthcheck: <http://localhost:8000/health>
 > ```
 >
 > Una `locker.db` de una versión anterior **se actualiza sin perder datos**: la
-> migración inicial conserva las tablas existentes y la segunda añade `bio`,
-> `token_version` y `tags.icono`.
+> migración inicial conserva las tablas existentes, la segunda añade `bio`,
+> `token_version` y `tags.icono`, y la tercera fusiona URLs duplicadas y crea la
+> restricción única `(user_id, url)`.
 
 ## Variables de entorno
 
@@ -132,7 +133,10 @@ Notas de validación:
   `localhost:3000` o `example.com:8443/ruta`), se rechazan los esquemas
   peligrosos (`javascript:`, `data:`, `file:`, `vbscript:`, `blob:`, `mailto:`,
   `tel:`) y las URLs de más de 2048 caracteres o con espacios.
-- No se permiten URLs duplicadas por usuario.
+- No se permiten URLs duplicadas por usuario: el host se guarda en minúsculas,
+  se quita la barra final redundante y la BD tiene una restricción única
+  `(user_id, url)` (la migración fusiona duplicados previos conservando el más
+  antiguo y sus etiquetas).
 - Etiquetas únicas por usuario sin distinguir mayúsculas.
 - `avatar_color` debe ser hex `#RRGGBB`.
 - Rate limiting en memoria:
@@ -176,7 +180,7 @@ database.py        Engine, sesión y PRAGMA foreign_keys para SQLite
 limitador.py       Rate limiting en memoria (IP, usuario, X-Forwarded-For)
 models.py          User, Link, Tag, link_tags y UTCDateTime (UTC en SQLite)
 schemas.py         Validación de entrada/salida (Pydantic)
-alembic/           Migraciones (esquema inicial + columnas de perfil)
+alembic/           Migraciones (esquema, columnas de perfil y URLs únicas)
 routers/auth.py    Registro, login, perfil, contraseña y recuperación
 routers/links.py   CRUD de links por usuario + conteo
 routers/tags.py    CRUD de etiquetas por usuario + conteo
