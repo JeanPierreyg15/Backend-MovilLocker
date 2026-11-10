@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 locker.db
+test_locker.db
+*.db
 
 __pycache__/
 *.py[cod]

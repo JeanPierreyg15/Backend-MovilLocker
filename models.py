@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, UniqueConstraint
+
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
+
 from database import Base
 
 
@@ -14,18 +16,26 @@ class User(Base):
     nombre = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
-    avatar_color = Column(String, nullable=True)
+    avatar_color = Column(String(7), nullable=True)
+    bio = Column(Text, nullable=True)
+    # Versión de sesión: se incrementa al cambiar/restablecer contraseña para
+    # invalidar todos los JWT emitidos anteriormente.
+    token_version = Column(Integer, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), default=ahora_utc)
 
-    links = relationship("Link", back_populates="owner")
-    tags = relationship("Tag", back_populates="owner")
+    links = relationship(
+        "Link", back_populates="owner", cascade="all, delete-orphan", passive_deletes=True
+    )
+    tags = relationship(
+        "Tag", back_populates="owner", cascade="all, delete-orphan", passive_deletes=True
+    )
 
 
 link_tags = Table(
     "link_tags",
     Base.metadata,
-    Column("link_id", Integer, ForeignKey("links.id"), primary_key=True),
-    Column("tag_id", Integer, ForeignKey("tags.id"), primary_key=True),
+    Column("link_id", Integer, ForeignKey("links.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", Integer, ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
 )
 
 
@@ -34,7 +44,7 @@ class Link(Base):
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String, nullable=False)
     titulo = Column(String, nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     created_at = Column(DateTime(timezone=True), default=ahora_utc)
 
     owner = relationship("User", back_populates="links")
@@ -46,7 +56,8 @@ class Tag(Base):
     __table_args__ = (UniqueConstraint("user_id", "nombre", name="uq_tags_usuario_nombre"),)
     id = Column(Integer, primary_key=True, index=True)
     nombre = Column(String, index=True, nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    icono = Column(String(16), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=ahora_utc)
 
     owner = relationship("User", back_populates="tags")

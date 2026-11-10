@@ -1,5 +1,6 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
 from config import config
 
 
@@ -8,13 +9,21 @@ class Base(DeclarativeBase):
 
 
 def _argumentos_sqlite() -> dict:
-    if config.DATABASE_URL.startswith("sqlite"):
-        return {"check_same_thread": False}
-    return {}
+    return {"check_same_thread": False} if config.DATABASE_URL.startswith("sqlite") else {}
 
 
 engine = create_engine(config.DATABASE_URL, connect_args=_argumentos_sqlite())
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+if config.DATABASE_URL.startswith("sqlite"):
+
+    @event.listens_for(engine, "connect")
+    def _activar_claves_foraneas(conexion_dbapi, _registro):
+        """SQLite ignora las FK (y sus ON DELETE CASCADE) si no se activan por conexión."""
+        cursor = conexion_dbapi.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 def get_db():
