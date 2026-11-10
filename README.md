@@ -103,7 +103,7 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | GET | `/health` | Estado de la API y de la base de datos |
-| POST | `/auth/register` | Registro (`nombre`, `email`, `password` 8–72) |
+| POST | `/auth/register` | Registro (`nombre`, `email`, `password` de 8 caracteres a 72 bytes) |
 | POST | `/auth/login` | Login → `{access_token, token_type, usuario}` |
 | GET | `/auth/me` | Usuario autenticado |
 | PUT | `/auth/perfil` | Actualiza `nombre`, `bio`, `avatar_color` |
@@ -125,6 +125,9 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 Notas de validación:
 
 - Emails se normalizan a minúsculas.
+- Contraseñas: mínimo 8 caracteres y máximo 72 **bytes** UTF-8 (bcrypt trunca
+  a 72 bytes, no a 72 caracteres). Se valida también en el frontend con
+  `TextEncoder`.
 - URLs solo `http`/`https`; se añade `https://` si falta (también en
   `localhost:3000` o `example.com:8443/ruta`), se rechazan los esquemas
   peligrosos (`javascript:`, `data:`, `file:`, `vbscript:`, `blob:`, `mailto:`,

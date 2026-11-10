@@ -25,6 +25,7 @@ from schemas import (
     UserLogin,
     UserResponse,
     UserUpdate,
+    validar_password_bytes,
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -314,11 +315,18 @@ def restablecer_password(datos: RestablecerPassword, db: Session = Depends(get_d
             detail="Código de recuperación inválido o expirado",
         ) from None
 
-    if len(datos.password) < 8 or len(datos.password) > 72:
+    if len(datos.password) < 8:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="La contraseña debe tener entre 8 y 72 caracteres",
+            detail="La contraseña debe tener al menos 8 caracteres",
         )
+    try:
+        validar_password_bytes(datos.password)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(error),
+        ) from None
 
     # Al cambiar el hash, el token deja de ser válido (huella distinta) y se
     # invalidan además todas las sesiones activas.

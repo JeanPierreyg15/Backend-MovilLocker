@@ -9,10 +9,21 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, f
 # ---------- Utilidades de validación ----------
 
 LONGITUD_MAXIMA_URL = 2048
+LONGITUD_MAXIMA_PASSWORD_BYTES = 72
 ESQUEMAS_PERMITIDOS = frozenset({"http", "https"})
 ESQUEMAS_PELIGROSOS = frozenset(
     {"javascript", "data", "file", "vbscript", "blob", "mailto", "tel"}
 )
+
+
+def validar_password_bytes(valor: str) -> str:
+    """bcrypt solo usa los primeros 72 BYTES (no caracteres) de la contraseña."""
+    if len(valor.encode("utf-8")) > LONGITUD_MAXIMA_PASSWORD_BYTES:
+        raise ValueError(
+            f"La contraseña no puede superar los {LONGITUD_MAXIMA_PASSWORD_BYTES} bytes "
+            "(bcrypt trunca las contraseñas más largas)"
+        )
+    return valor
 
 
 def normalizar_url(valor: str) -> str:
@@ -87,6 +98,11 @@ class UserCreate(UserBase):
     # bcrypt solo usa los primeros 72 bytes: limitamos para evitar sorpresas
     password: str = Field(min_length=8, max_length=72)
 
+    @field_validator("password")
+    @classmethod
+    def password_en_bytes(cls, valor: str) -> str:
+        return validar_password_bytes(valor)
+
 
 class UserUpdate(BaseModel):
     nombre: Optional[str] = Field(default=None, min_length=1, max_length=80)
@@ -124,6 +140,11 @@ class UserLogin(BaseModel):
     def email_minusculas(cls, valor: str) -> str:
         return valor.strip().lower()
 
+    @field_validator("password")
+    @classmethod
+    def password_en_bytes(cls, valor: str) -> str:
+        return validar_password_bytes(valor)
+
 
 class Token(BaseModel):
     access_token: str
@@ -138,9 +159,19 @@ class CambiarPassword(BaseModel):
     password_actual: str = Field(min_length=1, max_length=72)
     password_nueva: str = Field(min_length=8, max_length=72)
 
+    @field_validator("password_actual", "password_nueva")
+    @classmethod
+    def passwords_en_bytes(cls, valor: str) -> str:
+        return validar_password_bytes(valor)
+
 
 class EliminarCuenta(BaseModel):
     password: str = Field(min_length=1, max_length=72)
+
+    @field_validator("password")
+    @classmethod
+    def password_en_bytes(cls, valor: str) -> str:
+        return validar_password_bytes(valor)
 
 
 # ---------- Etiquetas ----------
