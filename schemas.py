@@ -191,6 +191,52 @@ class EliminarCuenta(BaseModel):
         return validar_password_bytes(valor)
 
 
+# ---------- Recuperación de contraseña ----------
+
+LONGITUD_CODIGO_RECUPERACION = 8
+
+
+class SolicitudRecuperacion(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def email_minusculas(cls, valor: str) -> str:
+        return valor.strip().lower()
+
+
+class RestablecerPassword(BaseModel):
+    """Restablece la contraseña con el código enviado al correo."""
+
+    email: EmailStr
+    codigo: str = Field(
+        min_length=LONGITUD_CODIGO_RECUPERACION,
+        max_length=LONGITUD_CODIGO_RECUPERACION,
+    )
+    password: str = Field(min_length=8, max_length=72)
+
+    @field_validator("email")
+    @classmethod
+    def email_minusculas(cls, valor: str) -> str:
+        return valor.strip().lower()
+
+    @field_validator("codigo")
+    @classmethod
+    def codigo_de_ocho_digitos(cls, valor: str) -> str:
+        limpio = valor.strip()
+        # isdigit() acepta dígitos Unicode (árabe-índicos, etc.): exigimos ASCII.
+        if not (limpio.isascii() and limpio.isdigit()):
+            raise ValueError(
+                f"El código debe tener {LONGITUD_CODIGO_RECUPERACION} dígitos"
+            )
+        return limpio
+
+    @field_validator("password")
+    @classmethod
+    def password_en_bytes(cls, valor: str) -> str:
+        return validar_password_bytes(valor)
+
+
 # ---------- Etiquetas ----------
 
 class TagBase(BaseModel):

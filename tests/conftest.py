@@ -6,6 +6,9 @@ os.environ["DATABASE_URL"] = "sqlite:///./test_locker.db"
 os.environ["DEBUG"] = "true"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = "60"
+# Los tests crean el esquema con Base.metadata.create_all(); las migraciones se
+# prueban por separado sobre bases temporales.
+os.environ["AUTO_MIGRATE"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient

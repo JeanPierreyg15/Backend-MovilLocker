@@ -4,7 +4,7 @@ from fastapi import BackgroundTasks
 from starlette.requests import Request
 
 from config import config
-from correo import enmascarar_email, enviar_codigo_recuperacion
+from correo import enlace_recuperacion, enmascarar_email, enviar_codigo_recuperacion
 from database import SessionLocal
 from routers import auth as auth_router
 
@@ -57,7 +57,7 @@ def test_recuperar_no_espera_al_envio_del_correo(cliente, monkeypatch):
     # La petición no espera al SMTP: el envío queda encolado.
     assert duracion < 1.0
     assert len(tareas.tasks) == 1
-    assert "reset_token" not in respuesta
+    assert "codigo_desarrollo" not in respuesta
     assert llamadas == []  # aún no se ha ejecutado la tarea en segundo plano
 
 
@@ -81,7 +81,7 @@ def test_recuperar_responde_igual_exista_o_no_el_correo(cliente, monkeypatch):
 
     assert existente.status_code == inexistente.status_code == 200
     assert existente.json() == inexistente.json()
-    assert "reset_token" not in existente.json()
+    assert "codigo_desarrollo" not in existente.json()
     assert enviados == ["ana@ejemplo.com"]
 
 
@@ -102,3 +102,27 @@ def test_enmascarar_email_no_revela_la_parte_local():
     assert enmascarar_email("sin-arroba") == "***"
     assert enmascarar_email("") == "***"
     assert "ana" not in enmascarar_email("ana@ejemplo.com")
+
+
+def test_no_se_envia_enlace_con_app_url_local(monkeypatch):
+    for local in (
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://[::1]:5173",
+        "http://0.0.0.0:5173",
+        "http://locker.local",
+        "capacitor://localhost",
+    ):
+        monkeypatch.setattr(config, "APP_URL", local)
+        assert enlace_recuperacion("ana@ejemplo.com", "12345678") is None, local
+
+
+def test_el_enlace_incluye_correo_y_codigo_con_app_url_publica(monkeypatch):
+    monkeypatch.setattr(config, "APP_URL", "https://locker.ejemplo.com")
+
+    enlace = enlace_recuperacion("ana+dev@ejemplo.com", "00123456")
+
+    assert enlace == (
+        "https://locker.ejemplo.com/recuperar"
+        "?correo=ana%2Bdev%40ejemplo.com&codigo=00123456"
+    )

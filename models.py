@@ -1,6 +1,16 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import TypeDecorator
 
@@ -56,6 +66,9 @@ class User(Base):
     tags = relationship(
         "Tag", back_populates="owner", cascade="all, delete-orphan"
     )
+    password_resets = relationship(
+        "PasswordReset", back_populates="usuario", cascade="all, delete-orphan"
+    )
 
 
 link_tags = Table(
@@ -92,3 +105,24 @@ class Tag(Base):
 
     owner = relationship("User", back_populates="tags")
     links = relationship("Link", secondary=link_tags, back_populates="tags")
+
+
+class PasswordReset(Base):
+    """Código de recuperación de contraseña.
+
+    El código numérico nunca se guarda en claro: solo su hash bcrypt. Cada
+    código caduca, es de un solo uso y admite un máximo de intentos fallidos.
+    """
+
+    __tablename__ = "password_resets"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    codigo_hash = Column(String, nullable=False)
+    expira_at = Column(UTCDateTime, nullable=False)
+    intentos = Column(Integer, nullable=False, default=0)
+    usado = Column(Boolean, nullable=False, default=False)
+    created_at = Column(UTCDateTime, default=ahora_utc)
+
+    usuario = relationship("User", back_populates="password_resets")

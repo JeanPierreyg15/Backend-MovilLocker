@@ -36,6 +36,15 @@ CREATE TABLE link_tags (
     tag_id INTEGER NOT NULL REFERENCES tags(id),
     PRIMARY KEY (link_id, tag_id)
 );
+CREATE TABLE password_resets (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    codigo_hash VARCHAR NOT NULL,
+    expira_at DATETIME NOT NULL,
+    intentos INTEGER NOT NULL DEFAULT 0,
+    usado BOOLEAN NOT NULL DEFAULT 0,
+    created_at DATETIME
+);
 INSERT INTO users (id, nombre, email, hashed_password) VALUES (1, 'Ana', 'ana@ejemplo.com', 'hash');
 INSERT INTO links (id, url, titulo, user_id) VALUES (1, 'https://react.dev', 'React', 1);
 INSERT INTO tags (id, nombre, user_id) VALUES (1, 'Dev', 1);

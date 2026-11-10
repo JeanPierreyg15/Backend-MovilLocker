@@ -1,5 +1,5 @@
-import hashlib
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -7,7 +7,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWTError
 from passlib.context import CryptContext
-from pydantic import BaseModel, EmailStr
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,17 +14,19 @@ from config import config
 from correo import enmascarar_email, enviar_codigo_recuperacion
 from database import get_db
 from limitador import ip_cliente, limitar_peticiones
-from models import User
+from models import PasswordReset, User, ahora_utc
 from schemas import (
     CambiarPassword,
     EliminarCuenta,
+    LONGITUD_CODIGO_RECUPERACION,
     LoginResponse,
+    RestablecerPassword,
+    SolicitudRecuperacion,
     Token,
     UserCreate,
     UserLogin,
     UserResponse,
     UserUpdate,
-    validar_password_bytes,
 )
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -38,16 +39,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 # Hash falso para que el login tarde lo mismo exista o no el usuario (anti timing attack)
 HASH_FALSO = pwd_context.hash("contraseña-falsa-para-comparacion")
 
-
-# ---------- Esquemas propios de recuperación ----------
-
-class SolicitudRecuperacion(BaseModel):
-    email: EmailStr
-
-
-class RestablecerPassword(BaseModel):
-    token: str
-    password: str
+# Un código de recuperación admite como máximo estos intentos fallidos.
+MAX_INTENTOS_CODIGO = 5
 
 
 # ---------- Utilidades de token ----------
@@ -59,11 +52,6 @@ def crear_token(datos: dict, minutos: int) -> str:
 
 def decodificar_token(token: str) -> dict:
     return jwt.decode(token, config.SECRET_KEY, algorithms=[config.ALGORITHM])
-
-
-def huella_password(usuario: User) -> str:
-    """Huella corta del hash actual: invalida el token de reset tras usarlo."""
-    return hashlib.sha256(usuario.hashed_password.encode()).hexdigest()[:16]
 
 
 def error_no_autorizado() -> HTTPException:
@@ -281,6 +269,25 @@ def es_peticion_local(request: Request) -> bool:
     return host in {"127.0.0.1", "::1", "localhost"}
 
 
+def _generar_codigo() -> str:
+    """Código numérico de 8 dígitos con un generador criptográficamente seguro."""
+    maximo = 10**LONGITUD_CODIGO_RECUPERACION
+    return f"{secrets.randbelow(maximo):0{LONGITUD_CODIGO_RECUPERACION}d}"
+
+
+def _codigo_vigente(db: Session, usuario_id: int) -> PasswordReset | None:
+    """Último código no usado del usuario (los anteriores se invalidan al pedir otro)."""
+    return (
+        db.query(PasswordReset)
+        .filter(
+            PasswordReset.user_id == usuario_id,
+            PasswordReset.usado.is_(False),
+        )
+        .order_by(PasswordReset.id.desc())
+        .first()
+    )
+
+
 @router.post("/recuperar")
 def solicitar_recuperacion(
     solicitud: SolicitudRecuperacion,
@@ -288,79 +295,119 @@ def solicitar_recuperacion(
     tareas: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """Solicita un enlace/código de recuperación.
+    """Envía un código numérico de 8 dígitos para restablecer la contraseña.
 
     Por seguridad responde SIEMPRE lo mismo (exista o no el correo) y el envío
     SMTP se hace en segundo plano, de modo que el tiempo de respuesta no revela
     qué correos están registrados. Solo en desarrollo (DEBUG=true) y desde
-    loopback se devuelve ``reset_token`` para probar el flujo sin servidor de
-    correo.
+    loopback se devuelve ``codigo_desarrollo`` para probar el flujo sin servidor
+    de correo.
     """
     limitar_peticiones(request, "recuperar", maximo=10)
 
     usuario = existe_usuario(db, solicitud.email)
-    respuesta: dict = {"mensaje": "Si el correo está registrado, recibirás instrucciones para restablecer tu contraseña."}
+    respuesta: dict = {
+        "mensaje": "Si el correo está registrado, recibirás un código para restablecer tu contraseña."
+    }
 
-    if usuario is not None:
-        token = crear_token(
-            {
-                "sub": str(usuario.id),
-                "proposito": "reset",
-                "pwd": huella_password(usuario),
-            },
-            minutos=config.RESET_TOKEN_EXPIRE_MINUTES,
+    if usuario is None:
+        # Mismo coste que generar el código real: evita distinguir por tiempo.
+        pwd_context.hash(secrets.token_hex(8))
+        return respuesta
+
+    # Solo el último código solicitado sirve: los anteriores quedan invalidados.
+    db.query(PasswordReset).filter(
+        PasswordReset.user_id == usuario.id,
+        PasswordReset.usado.is_(False),
+    ).update({PasswordReset.usado: True}, synchronize_session=False)
+
+    codigo = _generar_codigo()
+    registro = PasswordReset(
+        user_id=usuario.id,
+        codigo_hash=pwd_context.hash(codigo),
+        expira_at=ahora_utc()
+        + timedelta(minutes=config.RESET_TOKEN_EXPIRE_MINUTES),
+    )
+    db.add(registro)
+    db.commit()
+
+    if config.smtp_configurado:
+        # La respuesta se devuelve ya: el SMTP puede tardar (o fallar) sin
+        # afectar al tiempo de respuesta ni revelar si el correo existe.
+        tareas.add_task(enviar_codigo_recuperacion, usuario.email, codigo)
+    elif config.DEBUG and es_peticion_local(request):
+        # Barrera: exponer el código únicamente en local y con DEBUG activo.
+        respuesta["codigo_desarrollo"] = codigo
+    else:
+        logger.warning(
+            "Recuperación solicitada para %s pero no se pudo entregar el correo "
+            "(SMTP no configurado o falló). El usuario no recibirá instrucciones.",
+            enmascarar_email(usuario.email),
         )
-
-        if config.smtp_configurado:
-            # La respuesta se devuelve ya: el SMTP puede tardar (o fallar) sin
-            # afectar al tiempo de respuesta ni revelar si el correo existe.
-            tareas.add_task(enviar_codigo_recuperacion, usuario.email, token)
-        elif config.DEBUG and es_peticion_local(request):
-            # Barrera: exponer el token únicamente en local y con DEBUG activo.
-            respuesta["reset_token"] = token
-        else:
-            logger.warning(
-                "Recuperación solicitada para %s pero no se pudo entregar el correo "
-                "(SMTP no configurado o falló). El usuario no recibirá instrucciones.",
-                enmascarar_email(usuario.email),
-            )
 
     return respuesta
 
 
 @router.post("/restablecer")
-def restablecer_password(datos: RestablecerPassword, db: Session = Depends(get_db)):
-    try:
-        carga = decodificar_token(datos.token)
-        usuario = db.get(User, int(carga["sub"]))
-        if (
-            carga.get("proposito") != "reset"
-            or usuario is None
-            or carga.get("pwd") != huella_password(usuario)
-        ):
-            raise PyJWTError
-    except (PyJWTError, KeyError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Código de recuperación inválido o expirado",
-        ) from None
+def restablecer_password(
+    datos: RestablecerPassword,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Verifica email + código y cambia la contraseña.
 
-    if len(datos.password) < 8:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="La contraseña debe tener al menos 8 caracteres",
-        )
-    try:
-        validar_password_bytes(datos.password)
-    except ValueError as error:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(error),
-        ) from None
+    El código caduca, es de un solo uso y admite un máximo de
+    ``MAX_INTENTOS_CODIGO`` intentos fallidos. Todos los errores devuelven el
+    mismo mensaje para no revelar si el correo está registrado.
+    """
+    limitar_peticiones(
+        request,
+        "restablecer",
+        maximo=10,
+        incluir_ip=False,
+        claves_extra=[f"ip:{ip_cliente(request)}:correo:{datos.email}"],
+    )
 
-    # Al cambiar el hash, el token deja de ser válido (huella distinta) y se
-    # invalidan además todas las sesiones activas.
+    error = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Código de recuperación inválido o expirado",
+    )
+
+    usuario = existe_usuario(db, datos.email)
+    if usuario is None:
+        pwd_context.verify(datos.codigo, HASH_FALSO)
+        raise error
+
+    registro = _codigo_vigente(db, usuario.id)
+    if registro is None:
+        pwd_context.verify(datos.codigo, HASH_FALSO)
+        raise error
+
+    if registro.expira_at <= ahora_utc():
+        registro.usado = True
+        db.commit()
+        raise error
+
+    if registro.intentos >= MAX_INTENTOS_CODIGO:
+        registro.usado = True
+        db.commit()
+        raise error
+
+    if not pwd_context.verify(datos.codigo, registro.codigo_hash):
+        registro.intentos += 1
+        if registro.intentos >= MAX_INTENTOS_CODIGO:
+            # Agotado: se invalida para que ni el código correcto vuelva a servir.
+            registro.usado = True
+        db.commit()
+        raise error
+
+    # Código correcto: se invalida (junto a cualquier otro activo) y se
+    # incrementa token_version para cerrar todas las sesiones emitidas.
     usuario.hashed_password = pwd_context.hash(datos.password)
     usuario.token_version += 1
+    db.query(PasswordReset).filter(
+        PasswordReset.user_id == usuario.id,
+        PasswordReset.usado.is_(False),
+    ).update({PasswordReset.usado: True}, synchronize_session=False)
     db.commit()
     return {"mensaje": "Contraseña actualizada con éxito. Ya puedes iniciar sesión."}

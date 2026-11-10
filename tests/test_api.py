@@ -219,17 +219,23 @@ def test_flujo_completo_de_recuperacion(cliente):
 
     solicitud = cliente.post("/auth/recuperar", json={"email": "ana@ejemplo.com"})
     assert solicitud.status_code == 200
-    token_reset = solicitud.json().get("reset_token")  # solo en DEBUG
-    assert token_reset
+    codigo = solicitud.json().get("codigo_desarrollo")  # solo en DEBUG
+    assert codigo and len(codigo) == 8 and codigo.isdigit()
 
-    # El token de reset NO sirve como sesión
-    assert cliente.get("/auth/me", headers=cabeceras(token_reset)).status_code == 401
+    # El código no sirve como token de sesión.
+    assert cliente.get("/auth/me", headers=cabeceras(codigo)).status_code == 401
 
-    cambio = cliente.post("/auth/restablecer", json={"token": token_reset, "password": "nuevaClave99"})
+    cambio = cliente.post(
+        "/auth/restablecer",
+        json={"email": "ana@ejemplo.com", "codigo": codigo, "password": "nuevaClave99"},
+    )
     assert cambio.status_code == 200
 
-    # Usar el mismo token otra vez falla (monouso)
-    reuso = cliente.post("/auth/restablecer", json={"token": token_reset, "password": "otraClave99"})
+    # Usar el mismo código otra vez falla (monouso).
+    reuso = cliente.post(
+        "/auth/restablecer",
+        json={"email": "ana@ejemplo.com", "codigo": codigo, "password": "otraClave99"},
+    )
     assert reuso.status_code == 400
 
     # La sesión anterior quedó invalidada y la nueva contraseña funciona
@@ -241,18 +247,18 @@ def test_flujo_completo_de_recuperacion(cliente):
 def test_recuperacion_no_revela_correos_inexistentes(cliente):
     respuesta = cliente.post("/auth/recuperar", json={"email": "nadie@ejemplo.com"})
     assert respuesta.status_code == 200
-    assert "reset_token" not in respuesta.json()
+    assert "codigo_desarrollo" not in respuesta.json()
 
 
-def test_reset_token_no_se_expone_fuera_de_loopback(cliente):
-    """Aunque DEBUG=true, una petición externa nunca recibe el token."""
+def test_codigo_no_se_expone_fuera_de_loopback(cliente):
+    """Aunque DEBUG=true, una petición externa nunca recibe el código."""
     registrar(cliente)
 
     with TestClient(app, client=("203.0.113.10", 50000)) as externo:
         respuesta = externo.post("/auth/recuperar", json={"email": "ana@ejemplo.com"})
 
     assert respuesta.status_code == 200
-    assert "reset_token" not in respuesta.json()
+    assert "codigo_desarrollo" not in respuesta.json()
 
     # Detrás de un proxy, una petición reenviada tampoco cuenta como local.
     with_proxy = cliente.post(
@@ -260,7 +266,7 @@ def test_reset_token_no_se_expone_fuera_de_loopback(cliente):
         json={"email": "ana@ejemplo.com"},
         headers={"X-Forwarded-For": "203.0.113.10"},
     )
-    assert "reset_token" not in with_proxy.json()
+    assert "codigo_desarrollo" not in with_proxy.json()
 
 
 def test_cambio_de_password_invalida_sesiones(cliente):

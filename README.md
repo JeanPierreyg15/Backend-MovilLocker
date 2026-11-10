@@ -58,8 +58,9 @@ Healthcheck: <http://localhost:8000/health>
 >
 > Una `locker.db` de una versión anterior **se actualiza sin perder datos**: la
 > migración inicial conserva las tablas existentes, la segunda añade `bio`,
-> `token_version` y `tags.icono`, y la tercera fusiona URLs duplicadas y crea la
-> restricción única `(user_id, url)`.
+> `token_version` y `tags.icono`, la tercera fusiona URLs duplicadas y crea la
+> restricción única `(user_id, url)`, y la cuarta añade `password_resets` para
+> los códigos de recuperación.
 
 ## Variables de entorno
 
@@ -79,7 +80,7 @@ Healthcheck: <http://localhost:8000/health>
 | `SMTP_USER` / `SMTP_PASSWORD` | No | Credenciales SMTP (usa una contraseña de aplicación). |
 | `SMTP_FROM` | No | Remitente visible (por defecto `SMTP_USER`). |
 | `SMTP_TLS` / `SMTP_SSL` | No | STARTTLS (587) o SSL directo (465). |
-| `APP_URL` | No | URL pública usada en el correo de recuperación. |
+| `APP_URL` | No | URL pública de la app. Solo si es `http`/`https` con un host no local se incluye un enlace en el correo; si no, se envía solo el código. |
 
 Ejemplo de `CORS_ORIGINS` para web + Capacitor:
 
@@ -92,13 +93,22 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 - `POST /auth/recuperar` responde **siempre 200** con el mismo mensaje, exista o
   no el correo (no revela cuentas registradas). El envío SMTP se hace en segundo
   plano (`BackgroundTasks`), así que el tiempo de respuesta tampoco lo revela.
+- El código es numérico, de **8 dígitos**, generado con `secrets` (admite ceros a
+  la izquierda como `00123456`).
+- En la base de datos solo se guarda su **hash bcrypt** en `password_resets`,
+  junto con la caducidad, el número de intentos y si ya se usó.
+- El código **caduca** a los `RESET_TOKEN_EXPIRE_MINUTES` (15 por defecto), es de
+  **un solo uso** y admite un **máximo de 5 intentos fallidos**; al agotarlos se
+  invalida aunque después se introduzca el correcto.
+- Pedir un código nuevo invalida el anterior: solo sirve el último solicitado.
 - Los logs enmascaran el correo (`a***@ejemplo.com`); nunca se registra completo.
 - El código se envía por SMTP si defines `SMTP_HOST` y `SMTP_FROM` (o
   `SMTP_USER`). Sin SMTP, en producción el usuario no recibe nada: la app
   registra una advertencia ruidosa al arrancar.
-- El código es de un solo uso: al cambiar la contraseña la huella del hash cambia
-  y el token deja de ser válido.
-- Con `DEBUG=true`, `reset_token` solo se devuelve si la petición viene de
+- El correo incluye el código y, **solo si `APP_URL` es una web real** (http/https
+  con host no local), un enlace a `APP_URL/recuperar?correo=...&codigo=...`. Con
+  `localhost`, loopback o dominios `.local` no se envía enlace.
+- Con `DEBUG=true`, `codigo_desarrollo` solo se devuelve si la petición viene de
   loopback (`127.0.0.1`/`::1`). Si `DEBUG=true` y hay orígenes CORS no locales,
   el backend avisa en el log al arrancar.
 - Cambiar o restablecer la contraseña incrementa `token_version`, por lo que todos
@@ -125,8 +135,8 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 | PUT | `/auth/password` | Cambia contraseña (`password_actual`, `password_nueva`) → token nuevo |
 | POST | `/auth/cerrar-sesiones` | Invalida los JWT anteriores y devuelve un token nuevo para este dispositivo |
 | DELETE | `/auth/cuenta` | Elimina la cuenta (body `{password}`) y todos sus datos |
-| POST | `/auth/recuperar` | Solicita código de recuperación |
-| POST | `/auth/restablecer` | Restablece con `{token, password}` |
+| POST | `/auth/recuperar` | Envía un código de 8 dígitos al correo (`{email}`) |
+| POST | `/auth/restablecer` | Restablece con `{email, codigo, password}` |
 | GET | `/links/?skip=&limit=` | Lista links del usuario (más recientes primero, por defecto 100) |
 | GET | `/links/count` | Total real de links del usuario (`{count}`) |
 | POST | `/links/` | Crea link (`url`, `titulo`, `tag_ids`) |
@@ -158,6 +168,7 @@ Notas de validación:
   - registro: 10/min por IP;
   - login: 10/min por combinación IP + correo;
   - recuperación: 10/min por IP;
+  - restablecer: 10/min por combinación IP + correo;
   - cambio de contraseña y borrado de cuenta: 5/min por IP y por usuario.
   - Solo se usa `X-Forwarded-For` si la petición viene de una IP de
     `TRUSTED_PROXIES`; si no, la cabecera se ignora.
@@ -174,9 +185,10 @@ Notas de validación:
 
 La suite cubre registro/login, perfil, links (incluidas URLs peligrosas,
 duplicados, paginación y conteo real), aislamiento entre usuarios, etiquetas con
-`links_count`, recuperación monouso (solo loopback en DEBUG), migración de una
-base de datos antigua, borrado en cascada incluso con FK antiguas sin
-`ON DELETE CASCADE`, invalidación de sesiones, borrado de cuenta y healthcheck.
+`links_count`, recuperación por código de 8 dígitos (hash en BD, caducidad, un
+solo uso, máximo de intentos y no enumeración), migración de una base de datos
+antigua, borrado en cascada incluso con FK antiguas sin `ON DELETE CASCADE`,
+invalidación de sesiones, borrado de cuenta y healthcheck.
 
 ## Docker
 
@@ -193,9 +205,9 @@ config.py          Configuración (SECRET_KEY obligatoria, SMTP, CORS)
 correo.py          Envío del código de recuperación por SMTP
 database.py        Engine, sesión y PRAGMA foreign_keys para SQLite
 limitador.py       Rate limiting en memoria (IP, usuario, X-Forwarded-For)
-models.py          User, Link, Tag, link_tags y UTCDateTime (UTC en SQLite)
+models.py          User, Link, Tag, PasswordReset, link_tags y UTCDateTime
 schemas.py         Validación de entrada/salida (Pydantic)
-alembic/           Migraciones (esquema, columnas de perfil y URLs únicas)
+alembic/           Migraciones (esquema, perfil, URLs únicas y códigos de recuperación)
 routers/auth.py    Registro, login, perfil, contraseña y recuperación
 routers/links.py   CRUD de links por usuario + conteo
 routers/tags.py    CRUD de etiquetas por usuario + conteo

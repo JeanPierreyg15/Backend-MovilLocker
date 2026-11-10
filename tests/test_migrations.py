@@ -95,6 +95,10 @@ def test_migracion_actualiza_una_base_de_datos_antigua(tmp_path, monkeypatch):
     cfg = _migrar(ruta, monkeypatch)
 
     conexion = sqlite3.connect(ruta)
+    tablas = {
+        fila[0]
+        for fila in conexion.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
     columnas_users = {fila[1] for fila in conexion.execute("PRAGMA table_info(users)")}
     columnas_tags = {fila[1] for fila in conexion.execute("PRAGMA table_info(tags)")}
     token_version = conexion.execute("SELECT token_version FROM users WHERE id = 1").fetchone()
@@ -105,9 +109,10 @@ def test_migracion_actualiza_una_base_de_datos_antigua(tmp_path, monkeypatch):
 
     esperado = ScriptDirectory.from_config(cfg).get_current_head()
 
-    # Se añadieron las columnas sin perder los datos existentes.
+    # Se añadieron las columnas y tablas sin perder los datos existentes.
     assert {"bio", "token_version"} <= columnas_users
     assert "icono" in columnas_tags
+    assert "password_resets" in tablas
     assert token_version == (1,)
     assert nombre_tag == ("Dev",)
     assert url_link == ("https://react.dev",)
@@ -122,11 +127,21 @@ def test_migracion_crea_una_base_de_datos_nueva(tmp_path, monkeypatch):
     tablas = {fila[0] for fila in conexion.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     columnas_users = {fila[1] for fila in conexion.execute("PRAGMA table_info(users)")}
     columnas_tags = {fila[1] for fila in conexion.execute("PRAGMA table_info(tags)")}
+    columnas_resets = {fila[1] for fila in conexion.execute("PRAGMA table_info(password_resets)")}
     conexion.close()
 
-    assert {"users", "links", "tags", "link_tags", "alembic_version"} <= tablas
+    assert {"users", "links", "tags", "link_tags", "password_resets", "alembic_version"} <= tablas
     assert {"bio", "token_version"} <= columnas_users
     assert "icono" in columnas_tags
+    assert {
+        "id",
+        "user_id",
+        "codigo_hash",
+        "expira_at",
+        "intentos",
+        "usado",
+        "created_at",
+    } <= columnas_resets
 
 
 def test_borrar_cuenta_via_api_tras_migrar_una_base_antigua(tmp_path, monkeypatch):

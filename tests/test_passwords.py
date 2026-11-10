@@ -65,17 +65,17 @@ def test_cambio_de_password_valida_bytes_en_ambas(cliente):
 def test_restablecer_valida_bytes(cliente):
     assert registrar(cliente).status_code == 200
     solicitud = cliente.post("/auth/recuperar", json={"email": "ana@ejemplo.com"})
-    token_reset = solicitud.json()["reset_token"]
+    codigo = solicitud.json()["codigo_desarrollo"]
 
     respuesta = cliente.post(
         "/auth/restablecer",
-        json={"token": token_reset, "password": EMOJIS_19},
+        json={"email": "ana@ejemplo.com", "codigo": codigo, "password": EMOJIS_19},
     )
     assert respuesta.status_code == 422
 
     # El código sigue siendo válido porque el cambio no se aplicó.
     correcto = cliente.post(
         "/auth/restablecer",
-        json={"token": token_reset, "password": "nuevaClave99"},
+        json={"email": "ana@ejemplo.com", "codigo": codigo, "password": "nuevaClave99"},
     )
     assert correcto.status_code == 200
