@@ -1,12 +1,14 @@
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -83,6 +85,45 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Locker API", version="1.2.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def registrar_peticion(request: Request, call_next):
+    """Log de una línea por petición, sin cuerpos ni cabeceras sensibles."""
+    inicio = time.perf_counter()
+    try:
+        respuesta = await call_next(request)
+    except Exception:
+        duracion = (time.perf_counter() - inicio) * 1000
+        logger.error(
+            "Petición %s %s falló tras %.1f ms",
+            request.method,
+            request.url.path,
+            duracion,
+        )
+        raise
+    duracion = (time.perf_counter() - inicio) * 1000
+    logger.info(
+        "%s %s -> %s (%.1f ms)",
+        request.method,
+        request.url.path,
+        respuesta.status_code,
+        duracion,
+    )
+    return respuesta
+
+
+@app.exception_handler(Exception)
+async def manejar_error_inesperado(request: Request, exc: Exception):
+    """Registra la traza y devuelve un JSON genérico, sin filtrar detalles."""
+    logger.exception(
+        "Error no controlado en %s %s", request.method, request.url.path
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Error interno del servidor"},
+    )
+
 
 app.add_middleware(
     CORSMiddleware,

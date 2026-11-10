@@ -99,6 +99,14 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 - Cambiar o restablecer la contraseña incrementa `token_version`, por lo que todos
   los JWT de sesión emitidos antes dejan de funcionar.
 
+## Errores y logs
+
+- Un error inesperado devuelve `{"detail": "Error interno del servidor"}` con
+  estado 500, sin exponer trazas ni datos internos. La traza completa queda en
+  el log del servidor.
+- Cada petición genera una línea con método, ruta, estado y duración. Nunca se
+  registran cuerpos, cabeceras `Authorization` ni tokens.
+
 ## Endpoints
 
 | Método | Ruta | Descripción |
