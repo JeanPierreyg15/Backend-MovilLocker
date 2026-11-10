@@ -152,6 +152,36 @@ def me(usuario_actual: User = Depends(get_current_user)):
     return usuario_actual
 
 
+@router.post("/cerrar-sesiones", response_model=Token)
+def cerrar_sesiones(
+    request: Request,
+    usuario_actual: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Invalida los JWT de todos los dispositivos y entrega uno nuevo a este.
+
+    Se incrementa ``token_version``: cualquier token emitido antes deja de
+    validar. El token nuevo mantiene la sesión del dispositivo que lo solicita
+    (mismo comportamiento que un cambio de contraseña).
+    """
+    limitar_peticiones(
+        request,
+        "cerrar-sesiones",
+        maximo=5,
+        claves_extra=[f"usuario:{usuario_actual.id}"],
+    )
+
+    usuario_actual.token_version += 1
+    db.commit()
+    db.refresh(usuario_actual)
+
+    token = crear_token(
+        {"sub": str(usuario_actual.id), "ver": usuario_actual.token_version},
+        minutos=config.ACCESS_TOKEN_EXPIRE_MINUTES,
+    )
+    return Token(access_token=token)
+
+
 # ---------- Perfil ----------
 
 @router.put("/perfil", response_model=UserResponse)

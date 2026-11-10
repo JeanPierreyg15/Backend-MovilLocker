@@ -102,7 +102,8 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
   loopback (`127.0.0.1`/`::1`). Si `DEBUG=true` y hay orígenes CORS no locales,
   el backend avisa en el log al arrancar.
 - Cambiar o restablecer la contraseña incrementa `token_version`, por lo que todos
-  los JWT de sesión emitidos antes dejan de funcionar.
+  los JWT de sesión emitidos antes dejan de funcionar. `POST /auth/cerrar-sesiones`
+  hace lo mismo y devuelve un token nuevo al dispositivo que lo solicita.
 
 ## Errores y logs
 
@@ -122,6 +123,7 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 | GET | `/auth/me` | Usuario autenticado |
 | PUT | `/auth/perfil` | Actualiza `nombre`, `bio`, `avatar_color` |
 | PUT | `/auth/password` | Cambia contraseña (`password_actual`, `password_nueva`) → token nuevo |
+| POST | `/auth/cerrar-sesiones` | Invalida los JWT anteriores y devuelve un token nuevo para este dispositivo |
 | DELETE | `/auth/cuenta` | Elimina la cuenta (body `{password}`) y todos sus datos |
 | POST | `/auth/recuperar` | Solicita código de recuperación |
 | POST | `/auth/restablecer` | Restablece con `{token, password}` |
