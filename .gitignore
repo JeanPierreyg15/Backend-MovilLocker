@@ -12,3 +12,6 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
+locker.db-shm
+*.db-wal
+*.db-shm
