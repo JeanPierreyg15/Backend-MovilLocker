@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -73,7 +74,12 @@ def crear_link(
         tags=_etiquetas_del_usuario(db, link.tag_ids or [], usuario_actual.id),
     )
     db.add(nuevo_link)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Carrera entre dos peticiones simultáneas: la restricción de BD gana.
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ese enlace ya está guardado") from None
     db.refresh(nuevo_link)
     return nuevo_link
 
@@ -100,7 +106,11 @@ def actualizar_link(
     existente.url = link.url
     existente.titulo = link.titulo
     existente.tags = _etiquetas_del_usuario(db, link.tag_ids or [], usuario_actual.id)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ese enlace ya está guardado") from None
     db.refresh(existente)
     return existente
 

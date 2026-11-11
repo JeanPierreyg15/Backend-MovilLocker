@@ -1,11 +1,12 @@
 import hashlib
 import logging
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jwt import PyJWTError
 from passlib.context import CryptContext
@@ -49,19 +50,42 @@ class SolicitudRecuperacion(BaseModel):
 # ---------- Rate limiting sencillo en memoria ----------
 
 _intentos: dict[str, list[float]] = defaultdict(list)
+# Los endpoints síncronos corren en varios hilos del threadpool: el diccionario
+# debe modificarse bajo un lock para no perder ni duplicar marcas.
+_candado = threading.Lock()
+
+# Una entrada sin actividad en este tiempo ya no frena ninguna petición.
+VIDA_MAXIMA_REGISTRO_SEGUNDOS = 3600
+
+
+def _purgar_intentos(ahora: float) -> None:
+    """Elimina clientes inactivos para que el diccionario no crezca sin límite."""
+    for clave, marcas in list(_intentos.items()):
+        vigentes = [
+            marca for marca in marcas if ahora - marca < VIDA_MAXIMA_REGISTRO_SEGUNDOS
+        ]
+        if vigentes:
+            _intentos[clave] = vigentes
+        else:
+            del _intentos[clave]
 
 
 def limitar_peticiones(request: Request, accion: str, maximo: int, ventana_segundos: int = 60) -> None:
     clave = f"{accion}:{request.client.host if request.client else 'desconocido'}"
     ahora = time.time()
-    recientes = [marca for marca in _intentos[clave] if ahora - marca < ventana_segundos]
-    if len(recientes) >= maximo:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Demasiados intentos. Espera un momento e inténtalo de nuevo.",
-        )
-    recientes.append(ahora)
-    _intentos[clave] = recientes
+    with _candado:
+        recientes = [
+            marca for marca in _intentos[clave] if ahora - marca < ventana_segundos
+        ]
+        if len(recientes) >= maximo:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Demasiados intentos. Espera un momento e inténtalo de nuevo.",
+            )
+        recientes.append(ahora)
+        _intentos[clave] = recientes
+        if len(_intentos) > 500:
+            _purgar_intentos(ahora)
 
 
 # ---------- Utilidades de token ----------
@@ -243,6 +267,7 @@ def es_peticion_local(request: Request) -> bool:
 def solicitar_recuperacion(
     solicitud: SolicitudRecuperacion,
     request: Request,
+    tareas: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """Solicita un enlace/código de recuperación.
@@ -250,6 +275,9 @@ def solicitar_recuperacion(
     Por seguridad responde SIEMPRE lo mismo (exista o no el correo) y no revela
     ningún token. Solo en desarrollo (DEBUG=true) y desde loopback se devuelve
     ``reset_token`` para poder probar el flujo sin servidor de correo.
+
+    El correo se envía en segundo plano: un SMTP lento no debe retrasar ni
+    bloquear la respuesta al usuario.
     """
     limitar_peticiones(request, "recuperar", maximo=10)
 
@@ -265,15 +293,16 @@ def solicitar_recuperacion(
             },
             minutos=config.RESET_TOKEN_EXPIRE_MINUTES,
         )
-        entregado = enviar_codigo_recuperacion(usuario.email, token)
 
-        # Barrera: exponer el token únicamente en local y con DEBUG activo.
-        if not entregado and config.DEBUG and es_peticion_local(request):
+        if config.smtp_configurado:
+            tareas.add_task(enviar_codigo_recuperacion, usuario.email, token)
+        elif config.DEBUG and es_peticion_local(request):
+            # Barrera: exponer el token únicamente en local y con DEBUG activo.
             respuesta["reset_token"] = token
-        elif not entregado:
+        else:
             logger.warning(
                 "Recuperación solicitada para %s pero no se pudo entregar el correo "
-                "(SMTP no configurado o falló). El usuario no recibirá instrucciones.",
+                "(SMTP no configurado). El usuario no recibirá instrucciones.",
                 usuario.email,
             )
 

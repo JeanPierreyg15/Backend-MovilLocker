@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import unicodedata
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import TypeDecorator
 
@@ -74,11 +74,20 @@ link_tags = Table(
     Base.metadata,
     Column("link_id", Integer, ForeignKey("links.id", ondelete="CASCADE"), primary_key=True),
     Column("tag_id", Integer, ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+    # La PK (link_id, tag_id) no acelera las búsquedas por tag_id.
+    Index("ix_link_tags_tag_id", "tag_id"),
 )
 
 
 class Link(Base):
     __tablename__ = "links"
+    __table_args__ = (
+        # Refuerza en la BD el duplicado que ya se comprueba en el router:
+        # dos peticiones simultáneas no pueden guardar la misma URL.
+        UniqueConstraint("user_id", "url", name="uq_links_usuario_url"),
+        # El listado filtra por usuario y ordena por fecha: índice compuesto.
+        Index("ix_links_user_created", "user_id", "created_at"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String, nullable=False)
     titulo = Column(String, nullable=False)

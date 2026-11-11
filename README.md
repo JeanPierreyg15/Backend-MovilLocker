@@ -64,7 +64,7 @@ Healthcheck: <http://localhost:8000/health>
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | No | Vida del token de sesión (60). |
 | `RESET_TOKEN_EXPIRE_MINUTES` | No | Vida del código de recuperación (15). |
 | `DEBUG` | No | Si es `true`, `/auth/recuperar` devuelve el código **solo a peticiones desde loopback**. **Solo desarrollo.** |
-| `CORS_ORIGINS` | No | Orígenes permitidos separados por coma. |
+| `CORS_ORIGINS` | No | Orígenes permitidos separados por coma. No admite `*`. |
 | `DATABASE_URL` | No | Cadena SQLAlchemy (por defecto `sqlite:///./locker.db`). |
 | `AUTO_MIGRATE` | No | Aplica `alembic upgrade head` al arrancar (por defecto `true`). |
 | `SMTP_HOST` | No | Servidor SMTP para enviar el código de recuperación. |
@@ -85,8 +85,9 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 - `POST /auth/recuperar` responde **siempre 200** con el mismo mensaje, exista o
   no el correo (no revela cuentas registradas).
 - El código se envía por SMTP si defines `SMTP_HOST` y `SMTP_FROM` (o
-  `SMTP_USER`). Sin SMTP, en producción el usuario no recibe nada: la app
-  registra una advertencia ruidosa al arrancar.
+  `SMTP_USER`). El envío se hace en segundo plano para no bloquear la respuesta.
+  Sin SMTP, en producción el usuario no recibe nada: la app registra una
+  advertencia ruidosa al arrancar.
 - El código es de un solo uso: al cambiar la contraseña la huella del hash cambia
   y el token deja de ser válido.
 - Con `DEBUG=true`, `reset_token` solo se devuelve si la petición viene de
@@ -124,10 +125,11 @@ Notas de validación:
 - Emails se normalizan a minúsculas.
 - URLs solo `http`/`https`; se añade `https://` si falta y se rechazan
   `javascript:`, `data:`, `file:`.
-- No se permiten URLs duplicadas por usuario.
+- No se permiten URLs duplicadas por usuario (también garantizado por la BD).
 - Etiquetas únicas por usuario sin distinguir mayúsculas.
 - `avatar_color` debe ser hex `#RRGGBB`.
-- Rate limiting básico: 20 login/min y 10 recuperaciones/min por IP.
+- Rate limiting básico: 20 login/min y 10 recuperaciones/min por IP; los
+  registros de clientes inactivos se depuran para no crecer sin límite.
 
 ## Tests
 

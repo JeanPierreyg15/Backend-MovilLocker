@@ -66,7 +66,7 @@ def test_migracion_actualiza_una_base_de_datos_antigua(tmp_path, monkeypatch):
     assert {"icono", "nombre_normalizado"} <= columnas_tags
     assert token_version == (1,)
     assert nombre_tag == ("Dev",)
-    assert version == ("0003_tags_normalizadas",)
+    assert version == ("0004_integridad_links",)
 
 
 def test_migracion_resuelve_etiquetas_duplicadas_por_acentos(tmp_path, monkeypatch):
@@ -104,6 +104,55 @@ def test_migracion_resuelve_etiquetas_duplicadas_por_acentos(tmp_path, monkeypat
     assert ("EDUCACIÓN (2)", "educación (2)") in {(fila[1], fila[2]) for fila in filas}
     assert ("Ñandú", "ñandú") in {(fila[1], fila[2]) for fila in filas}
     assert ("ñandú (2)", "ñandú (2)") in {(fila[1], fila[2]) for fila in filas}
+
+
+def test_migracion_fusiona_links_duplicados(tmp_path, monkeypatch):
+    ruta = tmp_path / "locker_links_duplicados.db"
+    conexion = sqlite3.connect(ruta)
+    conexion.executescript(ESQUEMA_ANTIGUO)
+    conexion.executescript(
+        """
+        INSERT INTO tags (id, nombre, user_id) VALUES (2, 'Ocio', 1);
+        INSERT INTO links (id, url, titulo, user_id) VALUES
+            (1, 'https://duplicado.dev', 'Primero', 1),
+            (2, 'https://duplicado.dev', 'Segundo', 1),
+            (3, 'https://otro.dev', 'Otro', 1);
+        INSERT INTO link_tags (link_id, tag_id) VALUES (1, 1), (2, 2), (3, 1);
+        """
+    )
+    conexion.close()
+
+    monkeypatch.setenv("ALEMBIC_DATABASE_URL", f"sqlite:///{ruta.as_posix()}")
+    cfg = Config(str(RAIZ / "alembic.ini"))
+    cfg.set_main_option("script_location", str(RAIZ / "alembic"))
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "head")
+
+    conexion = sqlite3.connect(ruta)
+    links = conexion.execute(
+        "SELECT id, url, titulo FROM links ORDER BY id"
+    ).fetchall()
+    etiquetas = conexion.execute(
+        "SELECT link_id, tag_id FROM link_tags ORDER BY link_id, tag_id"
+    ).fetchall()
+    indices_links = {fila[1] for fila in conexion.execute("PRAGMA index_list(links)")}
+    indices_link_tags = {
+        fila[1] for fila in conexion.execute("PRAGMA index_list(link_tags)")
+    }
+    version = conexion.execute("SELECT version_num FROM alembic_version").fetchone()
+    conexion.close()
+
+    assert links == [
+        (1, "https://duplicado.dev", "Primero"),
+        (3, "https://otro.dev", "Otro"),
+    ]
+    # Las etiquetas del duplicado se conservan en el link que queda.
+    assert etiquetas == [(1, 1), (1, 2), (3, 1)]
+    assert "uq_links_usuario_url" in indices_links
+    assert "ix_links_user_created" in indices_links
+    assert "ix_link_tags_tag_id" in indices_link_tags
+    assert version == ("0004_integridad_links",)
 
 
 def test_migracion_crea_una_base_de_datos_nueva(tmp_path, monkeypatch):

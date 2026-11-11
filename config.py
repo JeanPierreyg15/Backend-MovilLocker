@@ -53,6 +53,18 @@ class Configuracion(BaseSettings):
             )
         return valor
 
+    @field_validator("CORS_ORIGINS")
+    @classmethod
+    def validar_origenes_cors(cls, valor: str) -> str:
+        """Rechaza el comodín: con credenciales permitiría cualquier origen."""
+        origenes = [origen.strip() for origen in valor.split(",") if origen.strip()]
+        if "*" in origenes:
+            raise ValueError(
+                "CORS_ORIGINS no puede contener '*': la API envía credenciales. "
+                "Indica los orígenes exactos separados por coma."
+            )
+        return ",".join(origenes)
+
     @property
     def origenes_cors(self) -> list[str]:
         return [origen.strip() for origen in self.CORS_ORIGINS.split(",") if origen.strip()]
