@@ -30,7 +30,7 @@ class UTCDateTime(TypeDecorator):
     local (de ahí los "dentro de 5 horas" en zonas como America/Lima).
     """
 
-    impl = DateTime
+    impl = DateTime(timezone=True)
     cache_ok = True
 
     def process_bind_param(self, value, dialect):
@@ -84,7 +84,9 @@ class Link(Base):
     __table_args__ = (
         # Refuerza en la BD el duplicado que ya se comprueba en el router:
         # dos peticiones simultáneas no pueden guardar la misma URL.
-        UniqueConstraint("user_id", "url", name="uq_links_usuario_url"),
+        # Se usa un índice único (no UniqueConstraint) para coincidir con la
+        # migración 0004, que ya lo crea con este nombre.
+        Index("uq_links_usuario_url", "user_id", "url", unique=True),
         # El listado filtra por usuario y ordena por fecha: índice compuesto.
         Index("ix_links_user_created", "user_id", "created_at"),
     )

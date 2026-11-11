@@ -11,7 +11,7 @@ from schemas import normalizar_url
         ("localhost:3000", "https://localhost:3000"),
         ("midominio.com:8080/ruta", "https://midominio.com:8080/ruta"),
         ("midominio.com:8080?x=1", "https://midominio.com:8080?x=1"),
-        ("midominio.com:8080#inicio", "https://midominio.com:8080#inicio"),
+        ("midominio.com:8080#inicio", "https://midominio.com:8080"),
         ("https://ejemplo.com/ruta", "https://ejemplo.com/ruta"),
         ("http://localhost:8000", "http://localhost:8000"),
         ("react.dev", "https://react.dev"),

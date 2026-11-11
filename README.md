@@ -51,9 +51,14 @@ Healthcheck: <http://localhost:8000/health>
 > .venv\Scripts\alembic upgrade head
 > ```
 >
-> Una `locker.db` de una versión anterior **se actualiza sin perder datos**: la
-> migración inicial conserva las tablas existentes y la segunda añade `bio`,
-> `token_version` y `tags.icono`.
+> **Con más de un worker** (por ejemplo `uvicorn --workers 4`) pon
+> `AUTO_MIGRATE=false` y ejecuta `alembic upgrade head` como paso del despliegue,
+> antes de arrancar los workers. Así varias instancias no compiten por migrar la
+> misma base de datos.
+>
+> Una `locker.db` de una versión anterior **se actualiza sin perder datos**: las
+> migraciones conservan las tablas existentes y añaden columnas, índices y la
+> canonicalización de URLs.
 
 ## Variables de entorno
 
@@ -73,6 +78,14 @@ Healthcheck: <http://localhost:8000/health>
 | `SMTP_FROM` | No | Remitente visible (por defecto `SMTP_USER`). |
 | `SMTP_TLS` / `SMTP_SSL` | No | STARTTLS (587) o SSL directo (465). |
 | `APP_URL` | No | URL pública usada en el correo de recuperación. |
+| `TRUSTED_PROXIES` | No | IPs de proxies de confianza separadas por coma. Solo desde ellas se acepta `X-Forwarded-For`. |
+| `VENTANA_RATE_LIMIT_SEGUNDOS` | No | Ventana del rate limit (60 s). |
+| `LIMITE_LOGIN` / `LIMITE_REGISTRO` | No | Intentos por ventana (20 / 10). |
+| `LIMITE_RECUPERAR` / `LIMITE_RESTABLECER` | No | Intentos por ventana (10 / 10). |
+| `LIMITE_CAMBIAR_PASSWORD` / `LIMITE_ELIMINAR_CUENTA` | No | Intentos por ventana (10 / 5). |
+
+El rate limit es **en memoria y por proceso**. Con varios workers cada uno lleva
+su cuenta; si necesitas un límite global, usa un almacén compartido (Redis).
 
 Ejemplo de `CORS_ORIGINS` para web + Capacitor:
 
@@ -91,8 +104,9 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 - El código es de un solo uso: al cambiar la contraseña la huella del hash cambia
   y el token deja de ser válido.
 - Con `DEBUG=true`, `reset_token` solo se devuelve si la petición viene de
-  loopback (`127.0.0.1`/`::1`). Si `DEBUG=true` y hay orígenes CORS no locales,
-  el backend avisa en el log al arrancar.
+  loopback (`127.0.0.1`/`::1`). Si llega desde un móvil físico (no loopback), el
+  token se escribe en el log del servidor para poder probar el flujo sin SMTP.
+  Si `DEBUG=true` y hay orígenes CORS no locales, el backend avisa al arrancar.
 - Cambiar o restablecer la contraseña incrementa `token_version`, por lo que todos
   los JWT de sesión emitidos antes dejan de funcionar.
 
@@ -124,12 +138,15 @@ Notas de validación:
 
 - Emails se normalizan a minúsculas.
 - URLs solo `http`/`https`; se añade `https://` si falta y se rechazan
-  `javascript:`, `data:`, `file:`.
+  `javascript:`, `data:`, `file:`. Se canonicalizan (esquema/host en minúsculas,
+  sin `:80`/`:443`, sin `#fragmento` y sin `/` final en la raíz) para que dos
+  formas de la misma URL cuenten como un solo link.
 - No se permiten URLs duplicadas por usuario (también garantizado por la BD).
 - Etiquetas únicas por usuario sin distinguir mayúsculas.
 - `avatar_color` debe ser hex `#RRGGBB`.
-- Rate limiting básico: 20 login/min y 10 recuperaciones/min por IP; los
-  registros de clientes inactivos se depuran para no crecer sin límite.
+- Rate limiting por IP: login (IP + correo), registro, recuperación,
+  restablecimiento, cambio de contraseña y borrado de cuenta. Los máximos se
+  configuran en `.env`; los registros inactivos se depuran solos.
 
 ## Tests
 
@@ -149,6 +166,17 @@ base de datos antigua, borrado en cascada incluso con FK antiguas sin
 docker build -t locker-api .
 docker run --env-file .env -p 8000:8000 locker-api
 ```
+
+La imagen corre con un usuario sin privilegios y tiene `HEALTHCHECK` sobre
+`/health`. Con Docker Compose la base SQLite queda en un volumen, así que
+recrear el contenedor no borra los datos:
+
+```bash
+docker compose up --build
+```
+
+El servicio escucha en `http://localhost:8000` y guarda la BD en
+`sqlite:////data/locker.db`.
 
 ## Estructura
 

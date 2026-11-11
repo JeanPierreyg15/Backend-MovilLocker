@@ -22,8 +22,14 @@ if config.DATABASE_URL.startswith("sqlite"):
     def _activar_claves_foraneas(conexion_dbapi, _registro):
         """SQLite ignora las FK (y sus ON DELETE CASCADE) si no se activan por conexión."""
         cursor = conexion_dbapi.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+            # WAL permite leer mientras se escribe (varias peticiones a la vez).
+            cursor.execute("PRAGMA journal_mode=WAL")
+            # En vez de fallar al instante si la BD está ocupada, espera 5 s.
+            cursor.execute("PRAGMA busy_timeout=5000")
+        finally:
+            cursor.close()
 
 
 def get_db():

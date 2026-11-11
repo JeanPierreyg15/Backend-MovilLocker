@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import re
 from typing import List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, field_validator
 
@@ -16,6 +16,9 @@ def normalizar_url(valor: str) -> str:
     - Si hay algo: al inicio y lo que sigue son 1-5 dígitos seguidos de /, ?, # o fin → host:puerto, se antepone https://.
     - Cualquier otro esquema (javascript:, data:, file:, mailto:…) se rechaza.
     - El hostname debe existir y no ser solo puntos.
+    - Se canonicaliza para detectar duplicados: esquema y host en minúsculas,
+      sin puerto por defecto (:80 en http, :443 en https), sin #fragmento y sin
+      la / final cuando la ruta es solo la raíz.
     - Máximo 2048 caracteres.
     """
     texto = (valor or "").strip()
@@ -49,7 +52,31 @@ def normalizar_url(valor: str) -> str:
     if url.scheme not in ("http", "https") or not url.netloc or " " in url.netloc:
         raise ValueError("La URL debe ser un enlace válido http o https")
 
-    return url.geturl()
+    return _url_canonica(url)
+
+
+def _url_canonica(url) -> str:
+    """Reconstruye la URL con la forma canónica usada para detectar duplicados."""
+    esquema = url.scheme.lower()
+    host = (url.hostname or "").lower()
+    try:
+        puerto = url.port
+    except ValueError:
+        raise ValueError("La URL debe ser un enlace válido http o https") from None
+
+    if (esquema == "http" and puerto == 80) or (esquema == "https" and puerto == 443):
+        puerto = None
+
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = f"{host}:{puerto}" if puerto else host
+
+    ruta = url.path or ""
+    if ruta == "/":
+        ruta = ""
+
+    # El fragmento nunca identifica el recurso en el servidor: no distingue links.
+    return urlunparse((esquema, netloc, ruta, url.params, url.query, ""))
 
 
 # ---------- Usuarios / Autenticación ----------

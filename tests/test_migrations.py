@@ -2,7 +2,13 @@ import sqlite3
 from pathlib import Path
 
 from alembic import command
+from alembic.autogenerate import compare_metadata
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from sqlalchemy import create_engine
+
+from database import Base
+import models  # noqa: F401  (registra todas las tablas)
 
 RAIZ = Path(__file__).resolve().parents[1]
 
@@ -66,7 +72,7 @@ def test_migracion_actualiza_una_base_de_datos_antigua(tmp_path, monkeypatch):
     assert {"icono", "nombre_normalizado"} <= columnas_tags
     assert token_version == (1,)
     assert nombre_tag == ("Dev",)
-    assert version == ("0004_integridad_links",)
+    assert version == ("0005_urls_canonicas",)
 
 
 def test_migracion_resuelve_etiquetas_duplicadas_por_acentos(tmp_path, monkeypatch):
@@ -152,7 +158,67 @@ def test_migracion_fusiona_links_duplicados(tmp_path, monkeypatch):
     assert "uq_links_usuario_url" in indices_links
     assert "ix_links_user_created" in indices_links
     assert "ix_link_tags_tag_id" in indices_link_tags
-    assert version == ("0004_integridad_links",)
+    assert version == ("0005_urls_canonicas",)
+
+
+def test_migracion_canonicaliza_urls_y_fusiona_duplicados(tmp_path, monkeypatch):
+    ruta = tmp_path / "locker_urls_canonicas.db"
+    conexion = sqlite3.connect(ruta)
+    conexion.executescript(ESQUEMA_ANTIGUO)
+    conexion.executescript(
+        """
+        INSERT INTO tags (id, nombre, user_id) VALUES (2, 'Ocio', 1);
+        INSERT INTO links (id, url, titulo, user_id) VALUES
+            (1, 'https://a.com/', 'Primero', 1),
+            (2, 'https://a.com', 'Segundo', 1),
+            (3, 'HTTPS://Example.COM/x#frag', 'Mayúsculas', 1),
+            (4, 'http://otro.com:80/y', 'Puerto', 1);
+        INSERT INTO link_tags (link_id, tag_id) VALUES (1, 1), (2, 2);
+        """
+    )
+    conexion.close()
+
+    monkeypatch.setenv("ALEMBIC_DATABASE_URL", f"sqlite:///{ruta.as_posix()}")
+    cfg = Config(str(RAIZ / "alembic.ini"))
+    cfg.set_main_option("script_location", str(RAIZ / "alembic"))
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "head")
+
+    conexion = sqlite3.connect(ruta)
+    links = conexion.execute("SELECT id, url, titulo FROM links ORDER BY id").fetchall()
+    etiquetas = conexion.execute(
+        "SELECT link_id, tag_id FROM link_tags ORDER BY link_id, tag_id"
+    ).fetchall()
+    version = conexion.execute("SELECT version_num FROM alembic_version").fetchone()
+    conexion.close()
+
+    assert links == [
+        (1, "https://a.com", "Primero"),
+        (3, "https://example.com/x", "Mayúsculas"),
+        (4, "http://otro.com/y", "Puerto"),
+    ]
+    assert etiquetas == [(1, 1), (1, 2)]
+    assert version == ("0005_urls_canonicas",)
+
+
+def test_esquema_migrado_coincide_con_los_modelos(tmp_path, monkeypatch):
+    ruta = tmp_path / "locker_esquema.db"
+    monkeypatch.setenv("ALEMBIC_DATABASE_URL", f"sqlite:///{ruta.as_posix()}")
+    cfg = Config(str(RAIZ / "alembic.ini"))
+    cfg.set_main_option("script_location", str(RAIZ / "alembic"))
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "head")
+
+    motor = create_engine(f"sqlite:///{ruta.as_posix()}")
+    with motor.connect() as conexion:
+        diferencias = compare_metadata(
+            MigrationContext.configure(conexion, opts={"compare_type": True}),
+            Base.metadata,
+        )
+    motor.dispose()
+
+    assert diferencias == []
 
 
 def test_migracion_crea_una_base_de_datos_nueva(tmp_path, monkeypatch):

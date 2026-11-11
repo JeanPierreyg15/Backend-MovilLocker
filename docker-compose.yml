@@ -1,0 +1,17 @@
+services:
+  locker:
+    build: .
+    ports:
+      - "8000:8000"
+    # Copia .env.example como .env antes de levantar el contenedor.
+    env_file:
+      - .env
+    environment:
+      # La base SQLite vive en el volumen: recrear el contenedor no la borra.
+      DATABASE_URL: sqlite:////data/locker.db
+    volumes:
+      - locker-data:/data
+    restart: unless-stopped
+
+volumes:
+  locker-data:

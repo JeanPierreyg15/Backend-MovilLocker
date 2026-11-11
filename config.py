@@ -1,5 +1,11 @@
+from pathlib import Path
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# env_file relativo se resuelve contra el directorio de trabajo: al arrancar
+# desde otra carpeta (systemd, Docker, IDE) el .env no se encontraba.
+RAIZ_PROYECTO = Path(__file__).resolve().parent
 
 
 class Configuracion(BaseSettings):
@@ -41,7 +47,27 @@ class Configuracion(BaseSettings):
     # URL pública de la app, usada en el cuerpo del correo de recuperación.
     APP_URL: str = "http://localhost:5173"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # Proxies de confianza (separados por coma). Solo si la petición llega desde
+    # uno de ellos se usa X-Forwarded-For; de lo contrario cualquiera podría
+    # falsificar su IP y saltarse el rate limit.
+    TRUSTED_PROXIES: str = ""
+
+    # Límite de intentos por ventana. Los máximos viven aquí para poder ajustarlos
+    # sin tocar código. Con varios workers hace falta un almacén compartido
+    # (Redis): esta implementación es en memoria y cada proceso lleva su cuenta.
+    VENTANA_RATE_LIMIT_SEGUNDOS: int = 60
+    LIMITE_LOGIN: int = 20
+    LIMITE_REGISTRO: int = 10
+    LIMITE_RECUPERAR: int = 10
+    LIMITE_RESTABLECER: int = 10
+    LIMITE_CAMBIAR_PASSWORD: int = 10
+    LIMITE_ELIMINAR_CUENTA: int = 5
+
+    model_config = SettingsConfigDict(
+        env_file=RAIZ_PROYECTO / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     @field_validator("SECRET_KEY")
     @classmethod
@@ -68,6 +94,14 @@ class Configuracion(BaseSettings):
     @property
     def origenes_cors(self) -> list[str]:
         return [origen.strip() for origen in self.CORS_ORIGINS.split(",") if origen.strip()]
+
+    @property
+    def proxies_confiables(self) -> set[str]:
+        return {
+            proxy.strip()
+            for proxy in self.TRUSTED_PROXIES.split(",")
+            if proxy.strip()
+        }
 
     @property
     def smtp_configurado(self) -> bool:

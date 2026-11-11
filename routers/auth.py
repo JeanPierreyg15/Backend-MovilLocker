@@ -70,12 +70,38 @@ def _purgar_intentos(ahora: float) -> None:
             del _intentos[clave]
 
 
-def limitar_peticiones(request: Request, accion: str, maximo: int, ventana_segundos: int = 60) -> None:
-    clave = f"{accion}:{request.client.host if request.client else 'desconocido'}"
+def _ip_cliente(request: Request) -> str:
+    """IP real del cliente, confiando en X-Forwarded-For solo tras un proxy conocido."""
+    host = request.client.host if request.client else "desconocido"
+    if host in config.proxies_confiables:
+        reenviada = request.headers.get("x-forwarded-for")
+        if reenviada:
+            primera = reenviada.split(",")[0].strip()
+            if primera:
+                return primera
+    return host
+
+
+def limitar_peticiones(
+    request: Request,
+    accion: str,
+    maximo: int,
+    ventana_segundos: int | None = None,
+    clave_extra: str | None = None,
+) -> None:
+    """Cuenta intentos por IP (y por la clave extra indicada, p. ej. el correo).
+
+    El almacén es en memoria y por proceso: con varios workers cada uno lleva su
+    propia cuenta. Para un límite global hace falta un almacén compartido (Redis).
+    """
+    ventana = ventana_segundos or config.VENTANA_RATE_LIMIT_SEGUNDOS
+    clave = f"{accion}:{_ip_cliente(request)}"
+    if clave_extra:
+        clave = f"{clave}:{clave_extra}"
     ahora = time.time()
     with _candado:
         recientes = [
-            marca for marca in _intentos[clave] if ahora - marca < ventana_segundos
+            marca for marca in _intentos[clave] if ahora - marca < ventana
         ]
         if len(recientes) >= maximo:
             raise HTTPException(
@@ -135,7 +161,8 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 # ---------- Registro / Login ----------
 
 @router.post("/register", response_model=UserResponse)
-def register(user: UserCreate, db: Session = Depends(get_db)):
+def register(user: UserCreate, request: Request, db: Session = Depends(get_db)):
+    limitar_peticiones(request, "register", config.LIMITE_REGISTRO)
     if existe_usuario(db, user.email):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email ya registrado")
 
@@ -157,7 +184,12 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=LoginResponse)
 def login(user: UserLogin, request: Request, db: Session = Depends(get_db)):
-    limitar_peticiones(request, "login", maximo=20)
+    limitar_peticiones(
+        request,
+        "login",
+        config.LIMITE_LOGIN,
+        clave_extra=user.email,
+    )
 
     usuario = existe_usuario(db, user.email)
     if usuario is None:
@@ -210,10 +242,17 @@ def actualizar_perfil(
 @router.put("/password", response_model=Token)
 def cambiar_password(
     datos: CambiarPassword,
+    request: Request,
     usuario_actual: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Cambia la contraseña verificando la actual e invalida las sesiones anteriores."""
+    limitar_peticiones(
+        request,
+        "cambiar_password",
+        config.LIMITE_CAMBIAR_PASSWORD,
+        clave_extra=str(usuario_actual.id),
+    )
     if not pwd_context.verify(datos.password_actual, usuario_actual.hashed_password):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La contraseña actual no es correcta")
 
@@ -239,10 +278,17 @@ def cambiar_password(
 @router.delete("/cuenta", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_cuenta(
     datos: EliminarCuenta,
+    request: Request,
     usuario_actual: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Elimina la cuenta (con sus links y etiquetas) tras confirmar la contraseña."""
+    limitar_peticiones(
+        request,
+        "eliminar_cuenta",
+        config.LIMITE_ELIMINAR_CUENTA,
+        clave_extra=str(usuario_actual.id),
+    )
     if not pwd_context.verify(datos.password, usuario_actual.hashed_password):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La contraseña no es correcta")
 
@@ -279,7 +325,7 @@ def solicitar_recuperacion(
     El correo se envía en segundo plano: un SMTP lento no debe retrasar ni
     bloquear la respuesta al usuario.
     """
-    limitar_peticiones(request, "recuperar", maximo=10)
+    limitar_peticiones(request, "recuperar", config.LIMITE_RECUPERAR)
 
     usuario = existe_usuario(db, solicitud.email)
     respuesta: dict = {"mensaje": "Si el correo está registrado, recibirás instrucciones para restablecer tu contraseña."}
@@ -299,6 +345,14 @@ def solicitar_recuperacion(
         elif config.DEBUG and es_peticion_local(request):
             # Barrera: exponer el token únicamente en local y con DEBUG activo.
             respuesta["reset_token"] = token
+        elif config.DEBUG:
+            # Sin SMTP y desde un móvil físico no hay forma de ver el código:
+            # con DEBUG activo queda en el log del servidor para poder probar.
+            logger.warning(
+                "Código de recuperación para %s (DEBUG, petición no local): %s",
+                usuario.email,
+                token,
+            )
         else:
             logger.warning(
                 "Recuperación solicitada para %s pero no se pudo entregar el correo "
@@ -310,7 +364,12 @@ def solicitar_recuperacion(
 
 
 @router.post("/restablecer")
-def restablecer_password(datos: RestablecerPassword, db: Session = Depends(get_db)):
+def restablecer_password(
+    datos: RestablecerPassword,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    limitar_peticiones(request, "restablecer", config.LIMITE_RESTABLECER)
     try:
         carga = decodificar_token(datos.token)
         usuario = db.get(User, int(carga["sub"]))

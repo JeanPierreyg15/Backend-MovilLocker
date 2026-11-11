@@ -67,6 +67,19 @@ def auditar_configuracion() -> None:
             "correos en producción. Define SMTP_HOST y SMTP_FROM (o SMTP_USER)."
         )
 
+    if not config.DEBUG:
+        locales = [
+            origen
+            for origen in config.origenes_cors
+            if urlparse(origen).scheme in {"http", "https"} and _origen_local(origen)
+        ]
+        if locales:
+            logger.warning(
+                "CORS_ORIGINS incluye orígenes locales con DEBUG=false (%s). "
+                "En producción deja solo el dominio real de la app.",
+                ", ".join(locales),
+            )
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -90,7 +103,9 @@ app = FastAPI(title="Locker API", version="1.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.origenes_cors,
-    allow_credentials=True,
+    # La API autentica con Authorization: Bearer, no con cookies: no hacen falta
+    # credenciales CORS (y así no se comparte la sesión entre orígenes).
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
@@ -142,7 +157,9 @@ def _mensaje_validacion(error: dict) -> str:
     excepcion = contexto.get("error")
     if isinstance(excepcion, ValueError):
         mensaje = str(excepcion).removeprefix("Value error, ").strip()
-        if campo == "correo electrónico" and "email" in mensaje.lower():
+        if campo == "correo electrónico":
+            # EmailStr lanza mensajes en inglés ("The part after the @-sign..."):
+            # para el usuario siempre es el mismo problema.
             return "El correo electrónico no es válido."
         return mensaje
 
