@@ -9,3 +9,6 @@ test_locker.db
 __pycache__/
 *.py[cod]
 .venv/
+*.db
+*.db-shm
+*.db-wal
