@@ -63,10 +63,47 @@ def test_migracion_actualiza_una_base_de_datos_antigua(tmp_path, monkeypatch):
 
     # Se añadieron las columnas sin perder los datos existentes.
     assert {"bio", "token_version"} <= columnas_users
-    assert "icono" in columnas_tags
+    assert {"icono", "nombre_normalizado"} <= columnas_tags
     assert token_version == (1,)
     assert nombre_tag == ("Dev",)
-    assert version == ("0002_columnas_perfil",)
+    assert version == ("0003_tags_normalizadas",)
+
+
+def test_migracion_resuelve_etiquetas_duplicadas_por_acentos(tmp_path, monkeypatch):
+    ruta = tmp_path / "locker_duplicados.db"
+    conexion = sqlite3.connect(ruta)
+    conexion.executescript(ESQUEMA_ANTIGUO)
+    conexion.executescript(
+        """
+        INSERT INTO tags (id, nombre, user_id) VALUES
+            (2, 'Educación', 1),
+            (3, 'EDUCACIÓN', 1),
+            (4, 'Ñandú', 1),
+            (5, 'ñandú', 1);
+        """
+    )
+    conexion.close()
+
+    monkeypatch.setenv("ALEMBIC_DATABASE_URL", f"sqlite:///{ruta.as_posix()}")
+    cfg = Config(str(RAIZ / "alembic.ini"))
+    cfg.set_main_option("script_location", str(RAIZ / "alembic"))
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "head")
+    # Idempotente: volver a ejecutar no debe fallar ni cambiar datos.
+    command.upgrade(cfg, "head")
+
+    conexion = sqlite3.connect(ruta)
+    filas = conexion.execute(
+        "SELECT id, nombre, nombre_normalizado FROM tags ORDER BY id"
+    ).fetchall()
+    conexion.close()
+
+    normalizados = [fila[2] for fila in filas]
+    assert len(normalizados) == len(set(normalizados)) == 5
+    assert ("Educación", "educación") in {(fila[1], fila[2]) for fila in filas}
+    assert ("EDUCACIÓN (2)", "educación (2)") in {(fila[1], fila[2]) for fila in filas}
+    assert ("Ñandú", "ñandú") in {(fila[1], fila[2]) for fila in filas}
+    assert ("ñandú (2)", "ñandú (2)") in {(fila[1], fila[2]) for fila in filas}
 
 
 def test_migracion_crea_una_base_de_datos_nueva(tmp_path, monkeypatch):

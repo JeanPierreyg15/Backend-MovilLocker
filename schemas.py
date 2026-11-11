@@ -9,22 +9,46 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_serializer, f
 # ---------- Utilidades de validación ----------
 
 def normalizar_url(valor: str) -> str:
-    """Valida que sea una URL http/https y la normaliza (añade https:// si falta)."""
+    """Valida que sea una URL http/https y la normaliza (añade https:// si falta).
+
+    Reglas:
+    - Si hay algo: al inicio y lo que sigue empieza con //, el esquema debe ser http/https.
+    - Si hay algo: al inicio y lo que sigue son 1-5 dígitos seguidos de /, ?, # o fin → host:puerto, se antepone https://.
+    - Cualquier otro esquema (javascript:, data:, file:, mailto:…) se rechaza.
+    - El hostname debe existir y no ser solo puntos.
+    - Máximo 2048 caracteres.
+    """
     texto = (valor or "").strip()
     if not texto:
         raise ValueError("La URL es obligatoria")
 
-    esquema = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*):", texto)
+    if len(texto) > 2048:
+        raise ValueError("La URL no puede superar 2048 caracteres")
+
+    esquema = re.match(r"^([a-zA-Z][a-zA-Z0-9+.-]*):(.*)", texto, re.DOTALL)
     if esquema:
-        # Solo se permiten http/https: bloquea javascript:, data:, file:, etc.
-        if esquema.group(1).lower() not in ("http", "https"):
+        nombre_esquema = esquema.group(1).lower()
+        resto = esquema.group(2)
+        if nombre_esquema in ("http", "https"):
+            # Esquema http/https explícito: procesamos tal cual
+            url = urlparse(texto)
+        elif re.match(r"^(\d{1,5})([/?#]|$)", resto):
+            # Parece host:puerto (ej. localhost:3000 o midominio.com:8080/ruta)
+            url = urlparse(f"https://{texto}")
+        else:
+            # javascript:, data:, file:, mailto:, etc. → rechazado
             raise ValueError("La URL debe usar http o https")
-        url = urlparse(texto)
     else:
         url = urlparse(f"https://{texto}")
 
+    # El hostname debe existir y no ser solo puntos
+    hostname = url.hostname or ""
+    if not hostname or re.fullmatch(r"\.+", hostname):
+        raise ValueError("La URL debe ser un enlace válido http o https")
+
     if url.scheme not in ("http", "https") or not url.netloc or " " in url.netloc:
         raise ValueError("La URL debe ser un enlace válido http o https")
+
     return url.geturl()
 
 
@@ -48,9 +72,24 @@ class UserBase(BaseModel):
         return limpio
 
 
+def _validar_bytes_password(valor: str) -> str:
+    """Valida que la contraseña no supere 72 bytes UTF-8 (límite de bcrypt)."""
+    if len(valor.encode("utf-8")) > 72:
+        raise ValueError(
+            "La contraseña no puede superar 72 bytes. "
+            "Algunos caracteres especiales (ñ, á, 中…) ocupan más de 1 byte."
+        )
+    return valor
+
+
 class UserCreate(UserBase):
-    # bcrypt solo usa los primeros 72 bytes: limitamos para evitar sorpresas
-    password: str = Field(min_length=8, max_length=72)
+    # bcrypt trunca en silencio a 72 bytes: validamos en bytes, no en caracteres
+    password: str = Field(min_length=8)
+
+    @field_validator("password")
+    @classmethod
+    def password_en_bytes(cls, valor: str) -> str:
+        return _validar_bytes_password(valor)
 
 
 class UserUpdate(BaseModel):
@@ -63,6 +102,16 @@ class UserUpdate(BaseModel):
     @classmethod
     def email_minusculas(cls, valor):
         return valor.strip().lower() if valor else valor
+
+    @field_validator("nombre")
+    @classmethod
+    def nombre_sin_espacios(cls, valor):
+        if valor is None:
+            return valor
+        limpio = valor.strip()
+        if not limpio:
+            raise ValueError("El nombre no puede estar vacío")
+        return limpio
 
     @field_validator("bio")
     @classmethod
@@ -82,7 +131,9 @@ class UserResponse(BaseModel):
 
 class UserLogin(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=1, max_length=72)
+    # No se limita la longitud: una cuenta antigua pudo guardar una contraseña
+    # larga y bcrypt solo compara sus primeros 72 bytes.
+    password: str = Field(min_length=1)
 
     @field_validator("email")
     @classmethod
@@ -100,12 +151,29 @@ class LoginResponse(Token):
 
 
 class CambiarPassword(BaseModel):
-    password_actual: str = Field(min_length=1, max_length=72)
-    password_nueva: str = Field(min_length=8, max_length=72)
+    password_actual: str = Field(min_length=1)
+    password_nueva: str = Field(min_length=8)
+
+    @field_validator("password_nueva")
+    @classmethod
+    def password_nueva_en_bytes(cls, valor: str) -> str:
+        return _validar_bytes_password(valor)
 
 
 class EliminarCuenta(BaseModel):
-    password: str = Field(min_length=1, max_length=72)
+    password: str = Field(min_length=1)
+
+
+class RestablecerPassword(BaseModel):
+    """Restablecimiento con el código recibido por correo."""
+
+    token: str = Field(min_length=1)
+    password: str = Field(min_length=8)
+
+    @field_validator("password")
+    @classmethod
+    def password_en_bytes(cls, valor: str) -> str:
+        return _validar_bytes_password(valor)
 
 
 # ---------- Etiquetas ----------
@@ -160,7 +228,13 @@ class LinkBase(BaseModel):
 
 
 class LinkCreate(LinkBase):
-    tag_ids: Optional[List[int]] = []
+    tag_ids: List[int] = Field(default_factory=list, max_length=50)
+
+    @field_validator("tag_ids")
+    @classmethod
+    def sin_duplicados(cls, valores: List[int]) -> List[int]:
+        """Conserva el orden pero elimina ids repetidos."""
+        return list(dict.fromkeys(valores))
 
 
 class LinkResponse(LinkBase):

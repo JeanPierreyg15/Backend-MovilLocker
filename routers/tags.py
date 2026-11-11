@@ -4,7 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import Link, Tag, User, link_tags
+from models import Link, Tag, User, link_tags, normalizar_nombre_etiqueta
 from schemas import TagCountResponse, TagCreate, TagResponse
 from routers.auth import get_current_user
 
@@ -24,9 +24,10 @@ def _conteo_links_por_etiqueta(db: Session, usuario_id: int) -> dict[int, int]:
 
 
 def _buscar_por_nombre(db: Session, nombre: str, usuario_id: int, excluir_id: int | None = None):
-    """Búsqueda de etiqueta por nombre sin distinguir mayúsculas/minúsculas."""
+    """Búsqueda por la clave normalizada (NFKC + casefold)."""
     consulta = db.query(Tag).filter(
-        Tag.user_id == usuario_id, func.lower(Tag.nombre) == nombre.lower()
+        Tag.user_id == usuario_id,
+        Tag.nombre_normalizado == normalizar_nombre_etiqueta(nombre),
     )
     if excluir_id is not None:
         consulta = consulta.filter(Tag.id != excluir_id)
@@ -83,7 +84,12 @@ def crear_etiqueta(
     if _buscar_por_nombre(db, tag.nombre, usuario_actual.id):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Etiqueta ya registrada")
 
-    nueva = Tag(nombre=tag.nombre, icono=tag.icono, user_id=usuario_actual.id)
+    nueva = Tag(
+        nombre=tag.nombre,
+        nombre_normalizado=normalizar_nombre_etiqueta(tag.nombre),
+        icono=tag.icono,
+        user_id=usuario_actual.id,
+    )
     db.add(nueva)
     try:
         db.commit()
@@ -111,6 +117,7 @@ def actualizar_etiqueta(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ya tienes una etiqueta con ese nombre")
 
     etiqueta.nombre = tag.nombre
+    etiqueta.nombre_normalizado = normalizar_nombre_etiqueta(tag.nombre)
     etiqueta.icono = tag.icono
     try:
         db.commit()

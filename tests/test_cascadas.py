@@ -27,6 +27,7 @@ CREATE TABLE links (
 CREATE TABLE tags (
     id INTEGER PRIMARY KEY,
     nombre VARCHAR NOT NULL,
+    nombre_normalizado VARCHAR NOT NULL DEFAULT '',
     icono VARCHAR(16),
     user_id INTEGER NOT NULL REFERENCES users(id),
     created_at DATETIME

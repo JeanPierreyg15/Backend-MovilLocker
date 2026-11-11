@@ -21,6 +21,7 @@ from schemas import (
     CambiarPassword,
     EliminarCuenta,
     LoginResponse,
+    RestablecerPassword,
     Token,
     UserCreate,
     UserLogin,
@@ -43,11 +44,6 @@ HASH_FALSO = pwd_context.hash("contraseña-falsa-para-comparacion")
 
 class SolicitudRecuperacion(BaseModel):
     email: EmailStr
-
-
-class RestablecerPassword(BaseModel):
-    token: str
-    password: str
 
 
 # ---------- Rate limiting sencillo en memoria ----------
@@ -300,12 +296,6 @@ def restablecer_password(datos: RestablecerPassword, db: Session = Depends(get_d
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Código de recuperación inválido o expirado",
         ) from None
-
-    if len(datos.password) < 8 or len(datos.password) > 72:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="La contraseña debe tener entre 8 y 72 caracteres",
-        )
 
     # Al cambiar el hash, el token deja de ser válido (huella distinta) y se
     # invalidan además todas las sesiones activas.

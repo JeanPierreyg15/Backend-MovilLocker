@@ -1,10 +1,21 @@
 from datetime import datetime, timezone
+import unicodedata
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.types import TypeDecorator
 
 from database import Base
+
+
+def normalizar_nombre_etiqueta(nombre: str) -> str:
+    """Clave de comparación de etiquetas: sin espacios, NFKC y casefold.
+
+    SQLite solo aplica lower() a ASCII, por lo que "EDUCACIÓN" y "Educación"
+    se consideraban distintas. casefold() + NFKC resuelve acentos, eñes y
+    mayúsculas de forma consistente.
+    """
+    return unicodedata.normalize("NFKC", (nombre or "").strip()).casefold()
 
 
 def ahora_utc() -> datetime:
@@ -80,9 +91,13 @@ class Link(Base):
 
 class Tag(Base):
     __tablename__ = "tags"
-    __table_args__ = (UniqueConstraint("user_id", "nombre", name="uq_tags_usuario_nombre"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", "nombre", name="uq_tags_usuario_nombre"),
+        UniqueConstraint("user_id", "nombre_normalizado", name="uq_tags_usuario_nombre_normalizado"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     nombre = Column(String, index=True, nullable=False)
+    nombre_normalizado = Column(String, nullable=False)
     icono = Column(String(16), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(UTCDateTime, default=ahora_utc)

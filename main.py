@@ -1,12 +1,15 @@
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -103,6 +106,91 @@ def health(db: Session = Depends(get_db)):
     """Healthcheck real: comprueba también que la base de datos responde."""
     db.execute(text("SELECT 1"))
     return {"status": "ok", "database": "ok"}
+
+
+# ---------- Errores de validación legibles ----------
+
+CAMPOS_ES = {
+    "url": "URL",
+    "titulo": "título",
+    "nombre": "nombre",
+    "email": "correo electrónico",
+    "password": "contraseña",
+    "password_actual": "contraseña actual",
+    "password_nueva": "contraseña nueva",
+    "bio": "biografía",
+    "avatar_color": "color del avatar",
+    "tag_ids": "etiquetas",
+    "token": "código de recuperación",
+    "icono": "icono",
+}
+
+
+def _nombre_campo(loc: list) -> str:
+    if not loc:
+        return ""
+    campo = str(loc[-1])
+    return CAMPOS_ES.get(campo, campo.replace("_", " "))
+
+
+def _mensaje_validacion(error: dict) -> str:
+    tipo = error.get("type", "")
+    contexto = error.get("ctx") or {}
+    campo = _nombre_campo(error.get("loc") or [])
+
+    # Los ValueError de nuestros validadores ya están redactados en español.
+    excepcion = contexto.get("error")
+    if isinstance(excepcion, ValueError):
+        mensaje = str(excepcion).removeprefix("Value error, ").strip()
+        if campo == "correo electrónico" and "email" in mensaje.lower():
+            return "El correo electrónico no es válido."
+        return mensaje
+
+    if tipo == "missing":
+        return f"El campo {campo} es obligatorio."
+    if tipo == "string_too_short":
+        minimo = contexto.get("min_length")
+        return f"El campo {campo} debe tener al menos {minimo} caracteres."
+    if tipo in {"string_too_long", "too_long"}:
+        maximo = contexto.get("max_length")
+        return f"El campo {campo} no puede superar {maximo} caracteres."
+    if tipo == "string_pattern_mismatch":
+        return f"El campo {campo} tiene un formato inválido."
+    if tipo == "int_parsing" or tipo.endswith("_type"):
+        return f"El campo {campo} debe ser un número válido."
+    if tipo in {"greater_than", "greater_than_equal", "less_than", "less_than_equal"}:
+        return f"El campo {campo} está fuera del rango permitido."
+    if tipo == "json_invalid":
+        return "El cuerpo de la petición no es un JSON válido."
+    if tipo == "bool_parsing":
+        return f"El campo {campo} debe ser verdadero o falso."
+
+    mensaje = str(error.get("msg") or "Dato inválido")
+    mensaje = re.sub(r"^Value error,\s*", "", mensaje)
+    if "valid email" in mensaje.lower():
+        return "El correo electrónico no es válido."
+    return f"{campo}: {mensaje}" if campo else mensaje
+
+
+@app.exception_handler(RequestValidationError)
+async def errores_de_validacion(_request: Request, error: RequestValidationError):
+    """Traduce los 422 de Pydantic y quita prefijos técnicos en inglés.
+
+    Se conserva `detail` como lista para que el cliente pueda mostrar todos los
+    campos inválidos; no se devuelve `input` para no filtrar contraseñas.
+    """
+    detalle = [
+        {
+            "loc": list(item.get("loc") or []),
+            "msg": _mensaje_validacion(item),
+            "type": item.get("type", "value_error"),
+        }
+        for item in error.errors()
+    ]
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": detalle},
+    )
 
 
 app.include_router(auth.router)
