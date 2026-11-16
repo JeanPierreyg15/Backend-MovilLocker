@@ -277,8 +277,30 @@ class LinkBase(BaseModel):
         return limpio
 
 
+def validar_url_imagen(valor: Optional[str]) -> Optional[str]:
+    """Miniatura opcional del link: solo URLs http/https de hasta 2048 caracteres."""
+    if valor is None:
+        return None
+    texto = valor.strip()
+    if not texto:
+        return None
+    if len(texto) > 2048:
+        raise ValueError("La URL de la imagen no puede superar 2048 caracteres")
+    partes = urlparse(texto)
+    if partes.scheme not in ("http", "https") or not partes.netloc or " " in partes.netloc:
+        raise ValueError("La imagen debe ser un enlace http o https")
+    return texto
+
+
 class LinkCreate(LinkBase):
     tag_ids: List[int] = Field(default_factory=list, max_length=50)
+    # Miniatura (videos, música...). None en páginas normales: se usa el favicon.
+    imagen: Optional[str] = None
+
+    @field_validator("imagen")
+    @classmethod
+    def imagen_valida(cls, valor: Optional[str]) -> Optional[str]:
+        return validar_url_imagen(valor)
 
     @field_validator("tag_ids")
     @classmethod
@@ -295,10 +317,13 @@ class LinkPreview(BaseModel):
     descripcion: Optional[str] = None
     imagen: Optional[str] = None
     sitio: Optional[str] = None
+    # Solo en sitios multimedia; es lo que conviene guardar como imagen del link.
+    miniatura: Optional[str] = None
 
 
 class LinkResponse(LinkBase):
     id: int
+    imagen: Optional[str] = None
     tags: List[TagResponse] = []
     created_at: Optional[datetime] = None
 

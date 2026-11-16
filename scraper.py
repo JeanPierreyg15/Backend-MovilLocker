@@ -21,7 +21,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse
+from html import unescape
+from urllib.parse import parse_qs, urljoin, urlparse
 
 TIEMPO_ESPERA_SEGUNDOS = 6
 MAXIMO_BYTES = 1_000_000
@@ -49,6 +50,65 @@ class VistaPrevia:
     descripcion: str | None = None
     imagen: str | None = None
     sitio: str | None = None
+    # Miniatura para la tarjeta del link: solo en sitios multimedia (videos,
+    # música, reels...). En páginas normales queda None y se usa el favicon.
+    miniatura: str | None = None
+
+
+# ---------- Miniaturas de sitios multimedia ----------
+
+# Dominios cuya og:image es la miniatura del contenido (y no un logo genérico).
+DOMINIOS_MULTIMEDIA = {
+    "youtube.com", "youtu.be", "vimeo.com", "dailymotion.com", "dai.ly",
+    "twitch.tv", "tiktok.com", "instagram.com", "spotify.com", "soundcloud.com",
+    "music.apple.com", "deezer.com", "bandcamp.com", "kick.com", "rumble.com",
+    "facebook.com", "fb.watch", "pinterest.com", "flickr.com", "imgur.com",
+    "behance.net", "dribbble.com",
+}
+
+_PATRON_ID_YOUTUBE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+def _dominio_base(host: str | None) -> str:
+    host = (host or "").lower().removeprefix("www.").removeprefix("m.")
+    return host
+
+
+def _es_dominio_multimedia(host: str | None) -> bool:
+    dominio = _dominio_base(host)
+    return any(dominio == base or dominio.endswith("." + base) for base in DOMINIOS_MULTIMEDIA)
+
+
+def id_video_youtube(url: str) -> str | None:
+    """ID del video en youtube.com/watch?v=, youtu.be/, /shorts/, /embed/, /live/."""
+    partes = urlparse(url)
+    dominio = _dominio_base(partes.hostname)
+    candidato = None
+    if dominio == "youtu.be":
+        candidato = partes.path.strip("/").split("/")[0]
+    elif dominio == "youtube.com" or dominio.endswith(".youtube.com"):
+        if partes.path == "/watch":
+            candidato = parse_qs(partes.query).get("v", [None])[0]
+        else:
+            segmentos = partes.path.strip("/").split("/")
+            if len(segmentos) >= 2 and segmentos[0] in {"shorts", "embed", "live", "v"}:
+                candidato = segmentos[1]
+    return candidato if candidato and _PATRON_ID_YOUTUBE.fullmatch(candidato) else None
+
+
+def miniatura_youtube(url: str) -> str | None:
+    """Miniatura por defecto del video (existe siempre, sin descargar la página)."""
+    video = id_video_youtube(url)
+    return f"https://i.ytimg.com/vi/{video}/hqdefault.jpg" if video else None
+
+
+def elegir_miniatura(url: str, imagen: str | None, tipo_og: str | None) -> str | None:
+    """Miniatura solo para contenido multimedia; None en páginas normales."""
+    tipo = (tipo_og or "").lower()
+    multimedia = _es_dominio_multimedia(urlparse(url).hostname) or tipo.startswith(("video", "music"))
+    if imagen and multimedia:
+        return imagen
+    return miniatura_youtube(url)
 
 
 # ---------- Validación del destino ----------
@@ -182,7 +242,8 @@ def _limpiar(texto: str | None, maximo: int) -> str | None:
 def _url_absoluta(base: str, valor: str | None) -> str | None:
     if not valor:
         return None
-    absoluta = urljoin(base, valor.strip())
+    # Algunos sitios (p. ej. Vimeo) escapan dos veces: "...?f=webp&amp;region=us".
+    absoluta = urljoin(base, unescape(valor.strip()))
     return absoluta if urlparse(absoluta).scheme in ("http", "https") else None
 
 
@@ -214,13 +275,15 @@ def extraer_metadatos(html: str, url_base: str) -> VistaPrevia:
         or extractor.icono
     )
     sitio = meta.get("og:site_name") or meta.get("application-name") or urlparse(url_base).hostname
+    imagen_absoluta = _url_absoluta(url_base, imagen)
 
     return VistaPrevia(
         url=url_base,
         titulo=_limpiar(titulo, LONGITUD_MAXIMA_TITULO),
         descripcion=_limpiar(descripcion, LONGITUD_MAXIMA_DESCRIPCION),
-        imagen=_url_absoluta(url_base, imagen),
+        imagen=imagen_absoluta,
         sitio=_limpiar(sitio, 80),
+        miniatura=elegir_miniatura(url_base, imagen_absoluta, meta.get("og:type")),
     )
 
 
@@ -230,4 +293,5 @@ def obtener_vista_previa(url: str) -> VistaPrevia:
     vista = extraer_metadatos(html, url_final)
     # Se devuelve la URL pedida (la que se guardará), no la final tras redirecciones.
     vista.url = url
+    vista.miniatura = vista.miniatura or miniatura_youtube(url)
     return vista

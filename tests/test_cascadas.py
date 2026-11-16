@@ -22,6 +22,7 @@ CREATE TABLE links (
     id INTEGER PRIMARY KEY,
     url VARCHAR NOT NULL,
     titulo VARCHAR NOT NULL,
+    imagen VARCHAR(2048),
     user_id INTEGER NOT NULL REFERENCES users(id),
     created_at DATETIME
 );

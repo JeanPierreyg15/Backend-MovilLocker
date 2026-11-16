@@ -48,7 +48,12 @@ def vista_previa(
         ) from None
     except scraper.ErrorVistaPrevia as error:
         logger.info("Vista previa no disponible para %s: %s", url_normalizada, error)
-        vista = scraper.VistaPrevia(url=url_normalizada, sitio=scraper.urlparse(url_normalizada).hostname)
+        # Aunque la página no responda, de YouTube se conoce la miniatura.
+        vista = scraper.VistaPrevia(
+            url=url_normalizada,
+            sitio=scraper.urlparse(url_normalizada).hostname,
+            miniatura=scraper.miniatura_youtube(url_normalizada),
+        )
 
     return LinkPreview(
         url=vista.url,
@@ -56,6 +61,7 @@ def vista_previa(
         descripcion=vista.descripcion,
         imagen=vista.imagen,
         sitio=vista.sitio,
+        miniatura=vista.miniatura,
     )
 
 
@@ -118,6 +124,7 @@ def crear_link(
     nuevo_link = Link(
         url=link.url,
         titulo=link.titulo,
+        imagen=link.imagen,
         user_id=usuario_actual.id,
         tags=_etiquetas_del_usuario(db, link.tag_ids or [], usuario_actual.id),
     )
@@ -153,6 +160,7 @@ def actualizar_link(
 
     existente.url = link.url
     existente.titulo = link.titulo
+    existente.imagen = link.imagen
     existente.tags = _etiquetas_del_usuario(db, link.tag_ids or [], usuario_actual.id)
     try:
         db.commit()

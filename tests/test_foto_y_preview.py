@@ -97,6 +97,81 @@ def test_validar_destino_bloquea_direcciones_internas(url):
         scraper.validar_destino(url)
 
 
+# ---------- Miniaturas ----------
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "https://youtu.be/dQw4w9WgXcQ?t=10",
+        "https://m.youtube.com/shorts/dQw4w9WgXcQ",
+        "https://www.youtube.com/embed/dQw4w9WgXcQ",
+    ],
+)
+def test_miniatura_youtube_sin_descargar(url):
+    assert scraper.miniatura_youtube(url) == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+
+
+def test_miniatura_youtube_ignora_urls_sin_video():
+    assert scraper.miniatura_youtube("https://www.youtube.com/@canal") is None
+    assert scraper.miniatura_youtube("https://ejemplo.com/watch?v=dQw4w9WgXcQ") is None
+
+
+def test_miniatura_solo_en_sitios_multimedia():
+    html_video = '<meta property="og:image" content="https://i.vimeocdn.com/v.jpg?f=webp&amp;amp;r=us">'
+    vista = scraper.extraer_metadatos(html_video, "https://vimeo.com/123")
+    assert vista.miniatura == "https://i.vimeocdn.com/v.jpg?f=webp&r=us"
+
+    # og:type video en un dominio cualquiera también cuenta como multimedia.
+    html_tipo = '<meta property="og:type" content="video.other"><meta property="og:image" content="https://cdn.x/v.jpg">'
+    assert scraper.extraer_metadatos(html_tipo, "https://videos.ejemplo.com/1").miniatura == "https://cdn.x/v.jpg"
+
+    # Página normal: hay og:image pero no se usa como miniatura (se verá el favicon).
+    vista_normal = scraper.extraer_metadatos(HTML_OG, "https://ejemplo.com/articulo")
+    assert vista_normal.imagen is not None
+    assert vista_normal.miniatura is None
+
+
+def test_link_guarda_y_actualiza_la_miniatura(cliente):
+    cabeceras = _cabeceras(cliente)
+    miniatura = "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+
+    creado = cliente.post(
+        "/links/",
+        json={"url": "https://youtu.be/dQw4w9WgXcQ", "titulo": "Video", "imagen": miniatura},
+        headers=cabeceras,
+    )
+    assert creado.status_code == 200
+    assert creado.json()["imagen"] == miniatura
+
+    actualizado = cliente.put(
+        f"/links/{creado.json()['id']}",
+        json={"url": "https://ejemplo.com", "titulo": "Normal", "imagen": None},
+        headers=cabeceras,
+    )
+    assert actualizado.json()["imagen"] is None
+
+    rechazado = cliente.post(
+        "/links/",
+        json={"url": "https://otro.com", "titulo": "X", "imagen": "javascript:alert(1)"},
+        headers=cabeceras,
+    )
+    assert rechazado.status_code == 422
+
+
+def test_preview_sin_conexion_conserva_miniatura_de_youtube(cliente, monkeypatch):
+    cabeceras = _cabeceras(cliente)
+
+    def falla(url):
+        raise scraper.ErrorVistaPrevia("bloqueado")
+
+    monkeypatch.setattr(scraper, "obtener_vista_previa", falla)
+    respuesta = cliente.get(
+        "/links/preview", params={"url": "https://youtu.be/dQw4w9WgXcQ"}, headers=cabeceras
+    )
+    assert respuesta.json()["miniatura"] == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+
+
 # ---------- Endpoint /links/preview ----------
 
 def test_preview_devuelve_metadatos(cliente, monkeypatch):
@@ -117,6 +192,7 @@ def test_preview_devuelve_metadatos(cliente, monkeypatch):
         "descripcion": "Desc",
         "imagen": "https://e.com/i.png",
         "sitio": "E",
+        "miniatura": None,
     }
     # Se scrapea la URL ya normalizada.
     assert llamadas == ["https://ejemplo.com"]

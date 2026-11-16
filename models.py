@@ -95,6 +95,8 @@ class Link(Base):
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String, nullable=False)
     titulo = Column(String, nullable=False)
+    # Miniatura del contenido (videos, música...). Nula en páginas normales.
+    imagen = Column(String(2048), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     created_at = Column(UTCDateTime, default=ahora_utc)
 
