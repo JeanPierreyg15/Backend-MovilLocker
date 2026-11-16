@@ -56,6 +56,8 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     avatar_color = Column(String(7), nullable=True)
     bio = Column(Text, nullable=True)
+    # Foto de perfil como data URL (JPEG/PNG/WebP reducida en el cliente).
+    avatar_imagen = Column(Text, nullable=True)
     # Versión de sesión: se incrementa al cambiar/restablecer contraseña para
     # invalidar todos los JWT emitidos anteriormente.
     token_version = Column(Integer, nullable=False, default=1)

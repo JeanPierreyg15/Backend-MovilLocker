@@ -152,8 +152,31 @@ class UserResponse(BaseModel):
     nombre: str
     avatar_color: Optional[str] = None
     bio: Optional[str] = None
+    avatar_imagen: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# Tamaño máximo de la data URL de la foto (~375 KB de imagen en base64).
+# El cliente la reduce a 256x256 en JPEG, que ocupa bastante menos.
+LONGITUD_MAXIMA_FOTO = 500_000
+_PATRON_FOTO = re.compile(r"^data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$")
+
+
+class FotoPerfil(BaseModel):
+    """Foto de perfil enviada como data URL base64."""
+
+    imagen: str = Field(min_length=1)
+
+    @field_validator("imagen")
+    @classmethod
+    def imagen_valida(cls, valor: str) -> str:
+        texto = valor.strip()
+        if len(texto) > LONGITUD_MAXIMA_FOTO:
+            raise ValueError("La imagen es demasiado grande. Usa una foto más pequeña.")
+        if not _PATRON_FOTO.fullmatch(texto):
+            raise ValueError("La imagen debe ser JPEG, PNG o WebP.")
+        return texto
 
 
 class UserLogin(BaseModel):
@@ -262,6 +285,16 @@ class LinkCreate(LinkBase):
     def sin_duplicados(cls, valores: List[int]) -> List[int]:
         """Conserva el orden pero elimina ids repetidos."""
         return list(dict.fromkeys(valores))
+
+
+class LinkPreview(BaseModel):
+    """Metadatos extraídos de la página (web scraping) para autocompletar."""
+
+    url: str
+    titulo: Optional[str] = None
+    descripcion: Optional[str] = None
+    imagen: Optional[str] = None
+    sitio: Optional[str] = None
 
 
 class LinkResponse(LinkBase):

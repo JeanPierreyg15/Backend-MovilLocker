@@ -14,6 +14,7 @@ CREATE TABLE users (
     hashed_password VARCHAR NOT NULL,
     avatar_color VARCHAR(7),
     bio TEXT,
+    avatar_imagen TEXT,
     token_version INTEGER NOT NULL DEFAULT 1,
     created_at DATETIME
 );
