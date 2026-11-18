@@ -1,6 +1,7 @@
 # Locker API (Backend-MovilLocker)
 
-API REST en FastAPI para la app Locker: autenticación con JWT, links y etiquetas por usuario.
+API REST en FastAPI para la app Locker: autenticación con JWT, links y etiquetas
+por usuario, foto de perfil y vista previa de enlaces (web scraping).
 
 ## Requisitos
 
@@ -59,6 +60,16 @@ Healthcheck: <http://localhost:8000/health>
 > Una `locker.db` de una versión anterior **se actualiza sin perder datos**: las
 > migraciones conservan las tablas existentes y añaden columnas, índices y la
 > canonicalización de URLs.
+>
+> | Migración | Cambio |
+> |-----------|--------|
+> | `0001_esquema_inicial` | Tablas `users`, `links`, `tags`, `link_tags` |
+> | `0002_columnas_perfil` | `users.bio`, `users.token_version`, `tags.icono` |
+> | `0003_tags_normalizadas` | `tags.nombre_normalizado` y fusión de duplicados por acentos/mayúsculas |
+> | `0004_integridad_links` | Índice único `(user_id, url)` e índices de consulta |
+> | `0005_urls_canonicas` | Canonicaliza URLs y fusiona links duplicados |
+> | `0006_foto_perfil` | `users.avatar_imagen` (foto de perfil) |
+> | `0007_imagen_links` | `links.imagen` (miniatura de links multimedia) |
 
 ## Variables de entorno
 
@@ -83,6 +94,7 @@ Healthcheck: <http://localhost:8000/health>
 | `LIMITE_LOGIN` / `LIMITE_REGISTRO` | No | Intentos por ventana (20 / 10). |
 | `LIMITE_RECUPERAR` / `LIMITE_RESTABLECER` | No | Intentos por ventana (10 / 10). |
 | `LIMITE_CAMBIAR_PASSWORD` / `LIMITE_ELIMINAR_CUENTA` | No | Intentos por ventana (10 / 5). |
+| `LIMITE_PREVIEW` | No | Vistas previas de enlaces por usuario y ventana (30). |
 
 El rate limit es **en memoria y por proceso**. Con varios workers cada uno lleva
 su cuenta; si necesitas un límite global, usa un almacén compartido (Redis).
@@ -110,6 +122,36 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 - Cambiar o restablecer la contraseña incrementa `token_version`, por lo que todos
   los JWT de sesión emitidos antes dejan de funcionar.
 
+## Foto de perfil
+
+- `PUT /auth/foto` recibe `{imagen}` como data URL base64
+  (`data:image/jpeg|png|webp;base64,...`) de hasta ~500 KB y la guarda en
+  `users.avatar_imagen`. `DELETE /auth/foto` la quita.
+- La app recorta y reduce la foto a 256×256 JPEG antes de enviarla (~20 KB),
+  así que no hace falta un almacenamiento de archivos aparte.
+- La foto viaja en `UserResponse` (`avatar_imagen`): login, `/auth/me` y perfil.
+- Se rechazan otros formatos (SVG, HTML...) y las URLs externas.
+
+## Vista previa de enlaces (web scraping)
+
+`GET /links/preview?url=...` descarga la página y devuelve
+`{url, titulo, descripcion, imagen, sitio, miniatura}` leyendo `<title>` y las
+etiquetas Open Graph / Twitter Card. La app lo usa para autocompletar el título
+al pegar un link. Implementado en `scraper.py` solo con la biblioteca estándar.
+
+- **`miniatura`** solo se rellena en contenido multimedia: dominios conocidos
+  (YouTube, Vimeo, Spotify, TikTok, Twitch, SoundCloud, Instagram, Dailymotion...)
+  o páginas con `og:type` de video/música. En páginas normales es `null` y la app
+  muestra el favicon. La de YouTube se calcula del ID del video
+  (`i.ytimg.com/vi/<id>/hqdefault.jpg`), incluso si la página no responde.
+- **Protección SSRF**: se rechazan (400) los hosts que resuelven a IPs no
+  públicas (localhost, redes privadas, link-local, metadatos de la nube) y cada
+  redirección se vuelve a validar.
+- **Límites**: 6 s de espera, máximo 4 redirecciones, 1 MB descargado, solo
+  respuestas HTML y `LIMITE_PREVIEW` peticiones por usuario y minuto.
+- Si la página falla (caída, bloquea bots, no es HTML) responde 200 sin
+  metadatos: el guardado del link nunca se bloquea.
+
 ## Endpoints
 
 | Método | Ruta | Descripción |
@@ -119,13 +161,16 @@ http://localhost:5173,http://127.0.0.1:5173,capacitor://localhost,https://localh
 | POST | `/auth/login` | Login → `{access_token, token_type, usuario}` |
 | GET | `/auth/me` | Usuario autenticado |
 | PUT | `/auth/perfil` | Actualiza `nombre`, `bio`, `avatar_color` |
+| PUT | `/auth/foto` | Sube la foto de perfil (`{imagen}` data URL base64) |
+| DELETE | `/auth/foto` | Quita la foto de perfil |
 | PUT | `/auth/password` | Cambia contraseña (`password_actual`, `password_nueva`) → token nuevo |
 | DELETE | `/auth/cuenta` | Elimina la cuenta (body `{password}`) y todos sus datos |
 | POST | `/auth/recuperar` | Solicita código de recuperación |
 | POST | `/auth/restablecer` | Restablece con `{token, password}` |
 | GET | `/links/?skip=&limit=` | Lista links del usuario (más recientes primero, por defecto 100) |
 | GET | `/links/count` | Total real de links del usuario (`{count}`) |
-| POST | `/links/` | Crea link (`url`, `titulo`, `tag_ids`) |
+| GET | `/links/preview?url=` | Vista previa de la página (título, descripción, imagen, miniatura) |
+| POST | `/links/` | Crea link (`url`, `titulo`, `tag_ids`, `imagen` opcional) |
 | PUT | `/links/{id}` | Edita link |
 | DELETE | `/links/{id}` | Elimina link |
 | GET | `/tags/?skip=&limit=` | Lista etiquetas (incluye `links_count` real por etiqueta) |
@@ -144,6 +189,8 @@ Notas de validación:
 - No se permiten URLs duplicadas por usuario (también garantizado por la BD).
 - Etiquetas únicas por usuario sin distinguir mayúsculas.
 - `avatar_color` debe ser hex `#RRGGBB`.
+- `imagen` de un link (miniatura) es opcional y solo admite URLs `http`/`https`
+  de hasta 2048 caracteres.
 - Rate limiting por IP: login (IP + correo), registro, recuperación,
   restablecimiento, cambio de contraseña y borrado de cuenta. Los máximos se
   configuran en `.env`; los registros inactivos se depuran solos.
@@ -158,7 +205,10 @@ La suite cubre registro/login, perfil, links (incluidas URLs peligrosas,
 duplicados, paginación y conteo real), aislamiento entre usuarios, etiquetas con
 `links_count`, recuperación monouso (solo loopback en DEBUG), migración de una
 base de datos antigua, borrado en cascada incluso con FK antiguas sin
-`ON DELETE CASCADE`, invalidación de sesiones, borrado de cuenta y healthcheck.
+`ON DELETE CASCADE`, invalidación de sesiones, borrado de cuenta, healthcheck,
+foto de perfil (subida, borrado y formatos rechazados), extracción de
+metadatos, miniaturas multimedia, bloqueo de direcciones internas (SSRF) y el
+endpoint `/links/preview` (110 tests).
 
 ## Docker
 
@@ -187,9 +237,10 @@ correo.py          Envío del código de recuperación por SMTP
 database.py        Engine, sesión y PRAGMA foreign_keys para SQLite
 models.py          User, Link, Tag, link_tags y UTCDateTime (UTC en SQLite)
 schemas.py         Validación de entrada/salida (Pydantic)
-alembic/           Migraciones (esquema inicial + columnas de perfil)
-routers/auth.py    Registro, login, perfil, contraseña y recuperación
-routers/links.py   CRUD de links por usuario + conteo
+scraper.py         Vista previa de enlaces: descarga segura, Open Graph y miniaturas
+alembic/           Migraciones 0001–0007 (ver tabla de migraciones)
+routers/auth.py    Registro, login, perfil, foto, contraseña y recuperación
+routers/links.py   CRUD de links por usuario + conteo + vista previa
 routers/tags.py    CRUD de etiquetas por usuario + conteo
 tests/             Pruebas con pytest + TestClient
 ```

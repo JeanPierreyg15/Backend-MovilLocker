@@ -1,14 +1,68 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+import scraper
+from config import config
 from database import get_db
 from models import Link, Tag, User
-from schemas import LinkCreate, LinkResponse
-from routers.auth import get_current_user
+from schemas import LinkCreate, LinkPreview, LinkResponse, normalizar_url
+from routers.auth import get_current_user, limitar_peticiones
 
 router = APIRouter(prefix="/links", tags=["Links"])
+logger = logging.getLogger("locker.links")
+
+
+@router.get("/preview", response_model=LinkPreview)
+def vista_previa(
+    request: Request,
+    url: str = Query(min_length=1, max_length=2048),
+    usuario_actual: User = Depends(get_current_user),
+):
+    """Web scraping: devuelve título, descripción e imagen de la página.
+
+    Si la página no se puede leer (caída, bloquea bots, no es HTML...) responde
+    200 solo con la URL y el dominio: el cliente simplemente no autocompleta.
+    Las direcciones no públicas (localhost, red privada...) se rechazan con 400.
+    """
+    limitar_peticiones(
+        request,
+        "preview",
+        config.LIMITE_PREVIEW,
+        clave_extra=str(usuario_actual.id),
+    )
+    try:
+        url_normalizada = normalizar_url(url)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from None
+
+    try:
+        vista = scraper.obtener_vista_previa(url_normalizada)
+    except scraper.DestinoNoPermitido:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No se puede generar la vista previa de esa dirección",
+        ) from None
+    except scraper.ErrorVistaPrevia as error:
+        logger.info("Vista previa no disponible para %s: %s", url_normalizada, error)
+        # Aunque la página no responda, de YouTube se conoce la miniatura.
+        vista = scraper.VistaPrevia(
+            url=url_normalizada,
+            sitio=scraper.urlparse(url_normalizada).hostname,
+            miniatura=scraper.miniatura_youtube(url_normalizada),
+        )
+
+    return LinkPreview(
+        url=vista.url,
+        titulo=vista.titulo,
+        descripcion=vista.descripcion,
+        imagen=vista.imagen,
+        sitio=vista.sitio,
+        miniatura=vista.miniatura,
+    )
 
 
 def _etiquetas_del_usuario(db: Session, tag_ids: list[int], usuario_id: int) -> list[Tag]:
@@ -70,6 +124,7 @@ def crear_link(
     nuevo_link = Link(
         url=link.url,
         titulo=link.titulo,
+        imagen=link.imagen,
         user_id=usuario_actual.id,
         tags=_etiquetas_del_usuario(db, link.tag_ids or [], usuario_actual.id),
     )
@@ -105,6 +160,7 @@ def actualizar_link(
 
     existente.url = link.url
     existente.titulo = link.titulo
+    existente.imagen = link.imagen
     existente.tags = _etiquetas_del_usuario(db, link.tag_ids or [], usuario_actual.id)
     try:
         db.commit()

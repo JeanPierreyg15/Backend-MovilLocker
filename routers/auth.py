@@ -21,6 +21,7 @@ from models import User
 from schemas import (
     CambiarPassword,
     EliminarCuenta,
+    FotoPerfil,
     LoginResponse,
     RestablecerPassword,
     Token,
@@ -234,6 +235,31 @@ def actualizar_perfil(
     if datos.avatar_color is not None:
         usuario_actual.avatar_color = datos.avatar_color
 
+    db.commit()
+    db.refresh(usuario_actual)
+    return usuario_actual
+
+
+@router.put("/foto", response_model=UserResponse)
+def actualizar_foto(
+    datos: FotoPerfil,
+    usuario_actual: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Guarda la foto de perfil (data URL base64 ya reducida en el cliente)."""
+    usuario_actual.avatar_imagen = datos.imagen
+    db.commit()
+    db.refresh(usuario_actual)
+    return usuario_actual
+
+
+@router.delete("/foto", response_model=UserResponse)
+def eliminar_foto(
+    usuario_actual: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Quita la foto de perfil: el avatar vuelve a mostrar las iniciales."""
+    usuario_actual.avatar_imagen = None
     db.commit()
     db.refresh(usuario_actual)
     return usuario_actual

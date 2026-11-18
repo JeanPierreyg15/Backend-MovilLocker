@@ -62,6 +62,8 @@ class Configuracion(BaseSettings):
     LIMITE_RESTABLECER: int = 10
     LIMITE_CAMBIAR_PASSWORD: int = 10
     LIMITE_ELIMINAR_CUENTA: int = 5
+    # Vista previa de enlaces (web scraping): peticiones por usuario y ventana.
+    LIMITE_PREVIEW: int = 30
 
     model_config = SettingsConfigDict(
         env_file=RAIZ_PROYECTO / ".env",

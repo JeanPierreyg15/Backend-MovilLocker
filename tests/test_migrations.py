@@ -68,11 +68,11 @@ def test_migracion_actualiza_una_base_de_datos_antigua(tmp_path, monkeypatch):
     conexion.close()
 
     # Se añadieron las columnas sin perder los datos existentes.
-    assert {"bio", "token_version"} <= columnas_users
+    assert {"bio", "token_version", "avatar_imagen"} <= columnas_users
     assert {"icono", "nombre_normalizado"} <= columnas_tags
     assert token_version == (1,)
     assert nombre_tag == ("Dev",)
-    assert version == ("0005_urls_canonicas",)
+    assert version == ("0007_imagen_links",)
 
 
 def test_migracion_resuelve_etiquetas_duplicadas_por_acentos(tmp_path, monkeypatch):
@@ -158,7 +158,7 @@ def test_migracion_fusiona_links_duplicados(tmp_path, monkeypatch):
     assert "uq_links_usuario_url" in indices_links
     assert "ix_links_user_created" in indices_links
     assert "ix_link_tags_tag_id" in indices_link_tags
-    assert version == ("0005_urls_canonicas",)
+    assert version == ("0007_imagen_links",)
 
 
 def test_migracion_canonicaliza_urls_y_fusiona_duplicados(tmp_path, monkeypatch):
@@ -199,7 +199,7 @@ def test_migracion_canonicaliza_urls_y_fusiona_duplicados(tmp_path, monkeypatch)
         (4, "http://otro.com/y", "Puerto"),
     ]
     assert etiquetas == [(1, 1), (1, 2)]
-    assert version == ("0005_urls_canonicas",)
+    assert version == ("0007_imagen_links",)
 
 
 def test_esquema_migrado_coincide_con_los_modelos(tmp_path, monkeypatch):

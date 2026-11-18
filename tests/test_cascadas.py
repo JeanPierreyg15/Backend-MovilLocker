@@ -14,6 +14,7 @@ CREATE TABLE users (
     hashed_password VARCHAR NOT NULL,
     avatar_color VARCHAR(7),
     bio TEXT,
+    avatar_imagen TEXT,
     token_version INTEGER NOT NULL DEFAULT 1,
     created_at DATETIME
 );
@@ -21,6 +22,7 @@ CREATE TABLE links (
     id INTEGER PRIMARY KEY,
     url VARCHAR NOT NULL,
     titulo VARCHAR NOT NULL,
+    imagen VARCHAR(2048),
     user_id INTEGER NOT NULL REFERENCES users(id),
     created_at DATETIME
 );

@@ -152,8 +152,31 @@ class UserResponse(BaseModel):
     nombre: str
     avatar_color: Optional[str] = None
     bio: Optional[str] = None
+    avatar_imagen: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# Tamaño máximo de la data URL de la foto (~375 KB de imagen en base64).
+# El cliente la reduce a 256x256 en JPEG, que ocupa bastante menos.
+LONGITUD_MAXIMA_FOTO = 500_000
+_PATRON_FOTO = re.compile(r"^data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$")
+
+
+class FotoPerfil(BaseModel):
+    """Foto de perfil enviada como data URL base64."""
+
+    imagen: str = Field(min_length=1)
+
+    @field_validator("imagen")
+    @classmethod
+    def imagen_valida(cls, valor: str) -> str:
+        texto = valor.strip()
+        if len(texto) > LONGITUD_MAXIMA_FOTO:
+            raise ValueError("La imagen es demasiado grande. Usa una foto más pequeña.")
+        if not _PATRON_FOTO.fullmatch(texto):
+            raise ValueError("La imagen debe ser JPEG, PNG o WebP.")
+        return texto
 
 
 class UserLogin(BaseModel):
@@ -254,8 +277,30 @@ class LinkBase(BaseModel):
         return limpio
 
 
+def validar_url_imagen(valor: Optional[str]) -> Optional[str]:
+    """Miniatura opcional del link: solo URLs http/https de hasta 2048 caracteres."""
+    if valor is None:
+        return None
+    texto = valor.strip()
+    if not texto:
+        return None
+    if len(texto) > 2048:
+        raise ValueError("La URL de la imagen no puede superar 2048 caracteres")
+    partes = urlparse(texto)
+    if partes.scheme not in ("http", "https") or not partes.netloc or " " in partes.netloc:
+        raise ValueError("La imagen debe ser un enlace http o https")
+    return texto
+
+
 class LinkCreate(LinkBase):
     tag_ids: List[int] = Field(default_factory=list, max_length=50)
+    # Miniatura (videos, música...). None en páginas normales: se usa el favicon.
+    imagen: Optional[str] = None
+
+    @field_validator("imagen")
+    @classmethod
+    def imagen_valida(cls, valor: Optional[str]) -> Optional[str]:
+        return validar_url_imagen(valor)
 
     @field_validator("tag_ids")
     @classmethod
@@ -264,8 +309,21 @@ class LinkCreate(LinkBase):
         return list(dict.fromkeys(valores))
 
 
+class LinkPreview(BaseModel):
+    """Metadatos extraídos de la página (web scraping) para autocompletar."""
+
+    url: str
+    titulo: Optional[str] = None
+    descripcion: Optional[str] = None
+    imagen: Optional[str] = None
+    sitio: Optional[str] = None
+    # Solo en sitios multimedia; es lo que conviene guardar como imagen del link.
+    miniatura: Optional[str] = None
+
+
 class LinkResponse(LinkBase):
     id: int
+    imagen: Optional[str] = None
     tags: List[TagResponse] = []
     created_at: Optional[datetime] = None
 

@@ -56,6 +56,8 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     avatar_color = Column(String(7), nullable=True)
     bio = Column(Text, nullable=True)
+    # Foto de perfil como data URL (JPEG/PNG/WebP reducida en el cliente).
+    avatar_imagen = Column(Text, nullable=True)
     # Versión de sesión: se incrementa al cambiar/restablecer contraseña para
     # invalidar todos los JWT emitidos anteriormente.
     token_version = Column(Integer, nullable=False, default=1)
@@ -93,6 +95,8 @@ class Link(Base):
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String, nullable=False)
     titulo = Column(String, nullable=False)
+    # Miniatura del contenido (videos, música...). Nula en páginas normales.
+    imagen = Column(String(2048), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     created_at = Column(UTCDateTime, default=ahora_utc)
 
