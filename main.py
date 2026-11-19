@@ -18,6 +18,14 @@ from database import get_db
 import models  # noqa: F401  (registra los modelos para las migraciones)
 from routers import auth, links, tags
 
+origins = [
+    "http://localhost:8100",      # Ionic serve en desarrollo
+    "http://localhost:5173",      # Vite en desarrollo
+    "capacitor://localhost",      # App compilada en iOS
+    "http://localhost",           # App compilada en Android (Capacitor)
+    "https://localhost",          # App compilada en Android (si usa HTTPS)
+]
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
