@@ -12,7 +12,7 @@ def _argumentos_sqlite() -> dict:
     return {"check_same_thread": False} if config.DATABASE_URL.startswith("sqlite") else {}
 
 
-engine = create_engine(config.DATABASE_URL, connect_args=_argumentos_sqlite())
+engine = create_engine(config.DATABASE_URL, connect_args=_argumentos_sqlite(),pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
