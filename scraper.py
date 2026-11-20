@@ -15,6 +15,7 @@ Solo usa la biblioteca estándar. Medidas de seguridad:
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import socket
 import urllib.error
@@ -22,7 +23,7 @@ import urllib.request
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from html import unescape
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 TIEMPO_ESPERA_SEGUNDOS = 6
 MAXIMO_BYTES = 1_000_000
@@ -102,13 +103,43 @@ def miniatura_youtube(url: str) -> str | None:
     return f"https://i.ytimg.com/vi/{video}/hqdefault.jpg" if video else None
 
 
+def _es_dominio_youtube(host: str | None) -> bool:
+    dominio = _dominio_base(host)
+    return dominio == "youtube.com" or dominio == "youtu.be" or dominio.endswith(".youtube.com")
+
+
+def _es_url_youtube(url: str) -> bool:
+    return _es_dominio_youtube(urlparse(url).hostname)
+
+
+def _es_imagen_youtube(valor: str | None) -> bool:
+    """Imagen alojada en los CDN de YouTube (no el favicon del sitio)."""
+    host = _dominio_base(urlparse(valor or "").hostname)
+    return any(
+        host == base or host.endswith("." + base)
+        for base in ("ytimg.com", "ggpht.com", "googleusercontent.com")
+    )
+
+
+def _parece_icono(valor: str | None) -> bool:
+    ruta = urlparse(valor or "").path.lower()
+    return ruta.endswith(".ico") or "favicon" in ruta
+
+
 def elegir_miniatura(url: str, imagen: str | None, tipo_og: str | None) -> str | None:
     """Miniatura solo para contenido multimedia; None en páginas normales."""
     tipo = (tipo_og or "").lower()
     multimedia = _es_dominio_multimedia(urlparse(url).hostname) or tipo.startswith(("video", "music"))
-    if imagen and multimedia:
+    video = miniatura_youtube(url)
+    if video:
+        # En YouTube el og:image puede ser el favicon (páginas genéricas): solo
+        # se usa si es una imagen real del video; si no, la del ID (existe siempre).
+        if imagen and _es_imagen_youtube(imagen) and not _parece_icono(imagen):
+            return imagen
+        return video
+    if imagen and multimedia and not _parece_icono(imagen):
         return imagen
-    return miniatura_youtube(url)
+    return None
 
 
 # ---------- Validación del destino ----------
@@ -191,6 +222,30 @@ def _descargar_html(url: str) -> tuple[str, str]:
 def _charset_meta(cuerpo: bytes) -> str | None:
     coincidencia = re.search(rb"<meta[^>]+charset=[\"']?([A-Za-z0-9_-]+)", cuerpo[:4096], re.IGNORECASE)
     return coincidencia.group(1).decode("ascii") if coincidencia else None
+
+
+def _descargar_json(url: str) -> dict:
+    """Descarga una respuesta JSON pequeña (p. ej. el oEmbed de YouTube)."""
+    peticion = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            "Accept-Encoding": "identity",
+        },
+    )
+    try:
+        with _abridor.open(peticion, timeout=TIEMPO_ESPERA_SEGUNDOS) as respuesta:
+            cuerpo = respuesta.read(MAXIMO_BYTES)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+        raise ErrorVistaPrevia("No se pudo consultar el servicio") from error
+    try:
+        datos = json.loads(cuerpo.decode("utf-8", errors="replace"))
+    except (UnicodeError, ValueError) as error:
+        raise ErrorVistaPrevia("Respuesta no válida") from error
+    if not isinstance(datos, dict):
+        raise ErrorVistaPrevia("Respuesta no válida")
+    return datos
 
 
 # ---------- Análisis del HTML ----------
@@ -293,5 +348,73 @@ def obtener_vista_previa(url: str) -> VistaPrevia:
     vista = extraer_metadatos(html, url_final)
     # Se devuelve la URL pedida (la que se guardará), no la final tras redirecciones.
     vista.url = url
+    if _es_url_youtube(url) and (_es_pagina_generica_youtube(url, vista) or not vista.titulo):
+        vista = _completar_con_oembed(url, vista)
     vista.miniatura = vista.miniatura or miniatura_youtube(url)
     return vista
+
+
+def _es_pagina_generica_youtube(url: str, vista: VistaPrevia) -> bool:
+    """YouTube responde con su portada (título "YouTube" y descripción genérica)
+    cuando el ID no existe, el video es privado o sirve una página de consentimiento."""
+    if not _es_url_youtube(url):
+        return False
+    titulo = (vista.titulo or "").strip().casefold()
+    descripcion = (vista.descripcion or "").casefold()
+    generica = any(
+        pista in descripcion for pista in ("comparte", "enjoy", "share", "teile")
+    )
+    return titulo in {"youtube", "youtube - inicio", "youtube - home", "youtube - reproduce"} and (
+        not descripcion or generica
+    )
+
+
+def _completar_con_oembed(url: str, vista: VistaPrevia) -> VistaPrevia:
+    """Pide los datos del video al oEmbed de YouTube.
+
+    A diferencia del HTML, oEmbed devuelve el título y la miniatura reales aunque
+    YouTube sirva la portada. Si tampoco responde (ID inválido o video no
+    disponible), se descartan los metadatos genéricos para no autocompletar un
+    título falso como "YouTube".
+    """
+    oembed = _vista_previa_oembed(url)
+    if oembed:
+        vista.titulo = oembed.titulo
+        vista.descripcion = oembed.descripcion
+        vista.imagen = oembed.imagen
+        vista.sitio = "YouTube"
+        vista.miniatura = oembed.miniatura
+        return vista
+    vista.titulo = None
+    vista.descripcion = None
+    vista.sitio = vista.sitio or "YouTube"
+    vista.miniatura = miniatura_youtube(url)
+    return vista
+
+
+def _vista_previa_oembed(url: str) -> VistaPrevia | None:
+    if not id_video_youtube(url):
+        return None
+    try:
+        datos = _descargar_json(
+            f"https://www.youtube.com/oembed?format=json&url={quote(url, safe='')}"
+        )
+    except ErrorVistaPrevia:
+        return None
+    titulo = datos.get("title")
+    titulo = _limpiar(titulo, LONGITUD_MAXIMA_TITULO) if isinstance(titulo, str) else None
+    if not titulo:
+        return None
+    miniatura = datos.get("thumbnail_url")
+    miniatura = (
+        _url_absoluta("https://www.youtube.com", miniatura)
+        if isinstance(miniatura, str)
+        else None
+    )
+    return VistaPrevia(
+        url=url,
+        titulo=titulo,
+        sitio="YouTube",
+        imagen=miniatura,
+        miniatura=miniatura or miniatura_youtube(url),
+    )

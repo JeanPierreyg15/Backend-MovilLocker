@@ -172,6 +172,63 @@ def test_preview_sin_conexion_conserva_miniatura_de_youtube(cliente, monkeypatch
     assert respuesta.json()["miniatura"] == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
 
 
+HTML_YOUTUBE_GENERICO = """
+<html><head>
+<title>YouTube</title>
+<meta property="og:title" content="YouTube">
+<meta property="og:description" content="Comparte videos con tus amigos, familiares y el resto del mundo">
+<meta property="og:image" content="https://m.youtube.com/static/favicon.ico">
+</head></html>
+"""
+
+
+def test_youtube_generico_usa_oembed_para_el_titulo_real(monkeypatch):
+    monkeypatch.setattr(
+        scraper, "_descargar_html", lambda url: (url, HTML_YOUTUBE_GENERICO)
+    )
+    monkeypatch.setattr(
+        scraper,
+        "_descargar_json",
+        lambda url: {
+            "title": "Rick Astley - Never Gonna Give You Up",
+            "thumbnail_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+        },
+    )
+
+    vista = scraper.obtener_vista_previa("https://m.youtube.com/watch?v=dQw4w9WgXcQ")
+
+    assert vista.titulo == "Rick Astley - Never Gonna Give You Up"
+    assert vista.descripcion is None
+    assert vista.sitio == "YouTube"
+    assert vista.miniatura == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+
+
+def test_youtube_generico_sin_oembed_no_inventa_titulo(monkeypatch):
+    monkeypatch.setattr(
+        scraper, "_descargar_html", lambda url: (url, HTML_YOUTUBE_GENERICO)
+    )
+
+    def sin_oembed(url):
+        raise scraper.ErrorVistaPrevia("404")
+
+    monkeypatch.setattr(scraper, "_descargar_json", sin_oembed)
+
+    vista = scraper.obtener_vista_previa("https://m.youtube.com/watch?v=dQw4w9WgXcQ")
+
+    assert vista.titulo is None
+    assert vista.descripcion is None
+    # Nunca el favicon del sitio: la miniatura fiable sale del ID del video.
+    assert vista.miniatura == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+
+
+def test_youtube_generico_no_usa_el_favicon_como_miniatura():
+    vista = scraper.extraer_metadatos(
+        HTML_YOUTUBE_GENERICO, "https://m.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
+    assert vista.imagen == "https://m.youtube.com/static/favicon.ico"
+    assert vista.miniatura == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+
+
 # ---------- Endpoint /links/preview ----------
 
 def test_preview_devuelve_metadatos(cliente, monkeypatch):
